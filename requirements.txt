@@ -5,3 +5,4 @@ datasets
 torch
 torchmetrics[image]
 scikit-image
+matplotlib
