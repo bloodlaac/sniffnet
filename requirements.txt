@@ -2,7 +2,8 @@ numpy
 pillow
 pandas
 datasets
-torch
 torchmetrics[image]
 scikit-image
 matplotlib
+jupyterlab
+kagglehub
