@@ -1,0 +1,17 @@
+[project]
+name = "sniffnet"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "datasets>=3.6.0",
+    "jupyterlab>=4.4.2",
+    "kagglehub>=0.3.12",
+    "matplotlib>=3.10.3",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pillow>=11.2.1",
+    "scikit-image>=0.25.2",
+    "torchmetrics[image]>=1.7.1",
+]

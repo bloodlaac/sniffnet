@@ -1,1 +1,1 @@
-💋💖💋💖💋💖💋красивый ридми файл 🥰🥴🥰🥴🥰🥴🥰
+A convolutional neuronet for image classification - detecting fresh and rotten products :cherries:
