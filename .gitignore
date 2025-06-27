@@ -12,3 +12,6 @@ venv
 
 # python packages / versions
 .python-version
+
+# python cache
+__pycache__

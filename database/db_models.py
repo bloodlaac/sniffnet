@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, VARBINARY
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from db import Base
 import datetime
@@ -6,7 +6,7 @@ import datetime
 class User(Base):
     __tablename__ = "user"
 
-    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, primary_key=True)
     username = Column(String(20), unique=True, nullable=False)
     email = Column(String(20), unique=True)
     created_at = Column(DateTime, default=datetime.timezone.utc)
@@ -17,7 +17,7 @@ class User(Base):
 class Experiment(Base):
     __tablename__ = "experiment"
 
-    id = Column(Integer, primary_key=True)
+    experiment_id = Column(Integer, primary_key=True)
     dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"))
     config_id = Column(Integer, ForeignKey("training_config.config_id"))
     user_id = Column(Integer, ForeignKey("user.user_id"))
@@ -62,12 +62,12 @@ class TrainingConfig(Base):
 class Model(Base):
     __tablename__ = "model"
 
-    id = Column(Integer, primary_key=True)
+    model_id = Column(Integer, primary_key=True)
     dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"))
     config_id = Column(Integer, ForeignKey("training_config.config_id"))
 
     params_num = Column(Integer)
-    weights = Column(VARBINARY)
+    weights = Column(LargeBinary)
     name = Column(String(20))
     training_time = Column(DateTime)
 
@@ -78,7 +78,7 @@ class Model(Base):
 class Metric(Base):
     __tablename__ = "metric"
 
-    id = Column(Integer, primary_key=True)
+    metric_id = Column(Integer, primary_key=True)
     dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"))
     config_id = Column(Integer, ForeignKey("training_config.config_id"))
 
