@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, LargeBinary
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    Float
+)
 from sqlalchemy.orm import relationship
-from db import Base
-import datetime
+from sniffnet.database.db import Base
+
+from datetime import datetime, timezone
 
 class User(Base):
     __tablename__ = "user"
@@ -9,7 +18,7 @@ class User(Base):
     user_id = Column(Integer, primary_key=True)
     username = Column(String(20), unique=True, nullable=False)
     email = Column(String(20), unique=True)
-    created_at = Column(DateTime, default=datetime.timezone.utc)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     experiments = relationship("Experiment", back_populates="user")
 
@@ -32,6 +41,7 @@ class Experiment(Base):
 
 class Dataset(Base):
     __tablename__ = "dataset"
+
     dataset_id = Column(Integer, primary_key=True)
     name = Column(String(20), nullable=False)
     classes_num = Column(Integer, nullable=False)
@@ -49,7 +59,7 @@ class TrainingConfig(Base):
     epochs_num = Column(Integer)
     batch_size = Column(Integer)
     loss_function = Column(String(20))
-    learning_rate = Column(Integer)
+    learning_rate = Column(Float)
     optimizer = Column(String(20))
     layers_num = Column(Integer)
     neurons_num = Column(Integer)
@@ -82,8 +92,8 @@ class Metric(Base):
     dataset_id = Column(Integer, ForeignKey("dataset.dataset_id"))
     config_id = Column(Integer, ForeignKey("training_config.config_id"))
 
-    train_accuracy = Column(Integer)
-    train_loss = Column(Integer)
+    train_accuracy = Column(Float)
+    train_loss = Column(Float)
 
     dataset = relationship("Dataset", back_populates="metrics")
     config = relationship("TrainingConfig", back_populates="metrics")
