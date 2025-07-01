@@ -5,7 +5,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     LargeBinary,
-    Float
+    Float,
+    Interval
 )
 from sqlalchemy.orm import relationship
 from sniffnet.database.db import Base
@@ -79,7 +80,7 @@ class Model(Base):
     params_num = Column(Integer)
     weights = Column(LargeBinary)
     name = Column(String(20))
-    training_time = Column(DateTime)
+    training_time = Column(Interval)
 
     dataset = relationship("Dataset", back_populates="models")
     config = relationship("TrainingConfig", back_populates="models")
