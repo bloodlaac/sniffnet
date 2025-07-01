@@ -24,11 +24,13 @@ def get_config(id, db: Annotated[Session, Depends(get_database)]):
     return config
 
 
-@router.post("/configurations")
-def post_config(config: ConfigRequest, db: Annotated[Session, Depends(get_database)]) -> ConfigRequest:
+@router.post("/configurations", response_model=ConfigRequest)
+def post_config(
+    config: ConfigRequest,
+    db: Annotated[Session, Depends(get_database)]
+):
     db_config = TrainingConfig(**config.model_dump())
     db.add(db_config)
     db.commit()
     db.refresh(db_config)
-
     return db_config

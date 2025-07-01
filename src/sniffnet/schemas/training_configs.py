@@ -2,7 +2,6 @@ from pydantic import BaseModel, ConfigDict
 
 
 class ConfigRequest(BaseModel):
-    config_id: int
     epochs_num: int
     batch_size: int
     loss_function: str
