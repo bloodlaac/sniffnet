@@ -19,6 +19,7 @@ class User(Base):
     user_id = Column(Integer, primary_key=True)
     username = Column(String(20), unique=True, nullable=False)
     email = Column(String(20), unique=True)
+    password = Column(String(128), nullable=False)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     experiments = relationship("Experiment", back_populates="user")

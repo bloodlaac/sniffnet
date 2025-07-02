@@ -20,6 +20,7 @@ from sniffnet.api.routes import (
     models,
     training_configs,
     users,
+    auth
 )
 
 import uvicorn
@@ -27,10 +28,10 @@ import uvicorn
 db: Session = next(get_database())
 
 # new_users = [
-#     User(username = "awesome_alex", email = "awesome@gmail.com"),
-#     User(username = "Vector", email = "vector@mail.ru"),
-#     User(username = "flawless", email = "flawless@gmail.com"),
-#     User(username = "comfy", email = "comfy@mail.ru")
+#     User(username = "awesome_alex", email = "awesome@gmail.com", password="1"),
+#     User(username = "Vector", email = "vector@mail.ru", password="2"),
+#     User(username = "flawless", email = "flawless@gmail.com", password="3"),
+#     User(username = "comfy", email = "comfy@mail.ru", password="4")
 # ]
 
 # db.add_all(new_users)
@@ -184,6 +185,7 @@ app.include_router(metrics.router)
 app.include_router(models.router)
 app.include_router(training_configs.router)
 app.include_router(users.router)
+app.include_router(auth.router)
 
 @app.get("/")
 def get_main_page():
