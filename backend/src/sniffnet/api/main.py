@@ -10,7 +10,9 @@ from sniffnet.api.routes import (
     models,
     training_configs,
     users,
-    auth
+    auth,
+    predict,
+    model_load,
 )
 
 import uvicorn
@@ -39,6 +41,8 @@ app.include_router(models.router)
 app.include_router(training_configs.router)
 app.include_router(users.router)
 app.include_router(auth.router)
+app.include_router(predict.router)
+app.include_router(model_load.router)
 
 @app.get("/")
 def get_main_page():
@@ -53,7 +57,7 @@ def run_migrations() -> None:
 
 def main() -> None:
     run_migrations()
-    uvicorn.run(app, host="localhost", port=7142)
+    uvicorn.run(app, host="localhost", port=8000)
 
 if __name__ == "__main__":
     main()
