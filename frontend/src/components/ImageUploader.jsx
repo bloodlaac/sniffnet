@@ -48,8 +48,8 @@ export default function ImageUploader({ valueFile, onChange, disabled = false })
   return (
     <div className="w-full">
       <div
-        className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-          disabled ? "opacity-60 cursor-not-allowed" : "hover:border-blue-400"
+        className={`rounded-2xl border border-dashed border-blue-200 bg-blue-50/60 p-6 text-center transition hover:border-blue-300 hover:bg-blue-50 ${
+          disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
         }`}
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -63,14 +63,18 @@ export default function ImageUploader({ valueFile, onChange, disabled = false })
           onChange={(e) => handleFiles(e.target.files)}
           disabled={disabled}
         />
-        <p className="text-lg font-semibold mb-2">Перетащите фото сюда</p>
-        <p className="text-sm text-gray-600">или нажмите, чтобы выбрать файл</p>
+        <p className="text-lg font-semibold text-slate-900 mb-1">
+          Перетащите фото сюда
+        </p>
+        <p className="text-sm text-slate-600">
+          или нажмите, чтобы выбрать файл
+        </p>
         {previewUrl && (
-          <div className="mt-4 flex justify-center">
+          <div className="mt-5 flex justify-center">
             <img
               src={previewUrl}
               alt="Предпросмотр"
-              className="max-h-64 rounded shadow-md object-contain"
+              className="max-h-72 rounded-2xl border border-slate-100 shadow-lg object-contain"
             />
           </div>
         )}

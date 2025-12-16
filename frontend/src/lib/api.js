@@ -1,82 +1,78 @@
-const API_BASE = "/api";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-async function handleJsonResponse(res) {
-  let data = null;
-  try {
-    data = await res.json();
-  } catch (err) {
-    // ignore parse errors; will handle below
-  }
-  return data;
+function normalizePath(path = "") {
+  return path.startsWith("/") ? path : `/${path}`;
 }
 
-export async function prewarmModel() {
-  const res = await fetch(`${API_BASE}/model/load`, { method: "POST" });
-  const data = await handleJsonResponse(res);
+async function parseResponse(res) {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    return text;
+  }
+}
 
-  if (!res.ok) {
-    const message = (data && (data.detail || data.error)) || `Failed to prewarm: ${res.status}`;
+async function api(path, options = {}) {
+  const { headers, body, method = "GET", ...rest } = options;
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+
+  const response = await fetch(`${API_BASE_URL}${normalizePath(path)}`, {
+    method,
+    headers: isFormData
+      ? headers
+      : {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+    body: body && !isFormData ? JSON.stringify(body) : body,
+    ...rest,
+  });
+
+  const data = await parseResponse(response);
+
+  if (!response.ok) {
+    const message =
+      (data && (data.detail || data.error || data.message)) ||
+      `Запрос вернул ${response.status}`;
     const err = new Error(message);
-    err.status = res.status;
+    err.status = response.status;
+    err.data = data;
     throw err;
   }
 
   return data;
 }
 
-export async function predictImage(file) {
+export const login = (username, password) =>
+  api("/auth/login", {
+    method: "POST",
+    body: { username, password },
+  });
+
+export const getDatasets = () => api("/datasets");
+export const getModels = () => api("/models");
+export const getConfigs = () => api("/configurations");
+export const getExperiments = () => api("/experiments");
+export const getExperiment = (id) => api(`/experiments/${id}`);
+
+export const createExperiment = (payload) =>
+  api("/experiments", {
+    method: "POST",
+    body: payload,
+  });
+
+export const predict = (file) => {
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch(`${API_BASE}/predict`, {
+  return api("/api/predict", {
     method: "POST",
     body: form,
+    headers: {},
   });
+};
 
-  const data = await handleJsonResponse(res);
-
-  if (!res.ok) {
-    const message = (data && (data.detail || data.error)) || `Prediction failed (${res.status})`;
-    const err = new Error(message);
-    err.status = res.status;
-    throw err;
-  }
-
-  return data;
-}
-
-export function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export async function predictWithRetry(
-  file,
-  { retries = 5, delayMs = 1200, onRetry } = {}
-) {
-  let attempt = 0;
-
-  while (attempt <= retries) {
-    try {
-      return await predictImage(file);
-    } catch (err) {
-      const isLoading =
-        err.status === 503 && err.message && err.message.toLowerCase().includes("loading");
-
-      if (!isLoading || attempt === retries) {
-        if (isLoading && attempt === retries) {
-          throw new Error("Model is still loading, try again later.");
-        }
-        throw err;
-      }
-
-      if (typeof onRetry === "function") {
-        onRetry(attempt + 1);
-      }
-
-      await sleep(delayMs);
-      attempt += 1;
-    }
-  }
-
-  throw new Error("Model is still loading, try again later.");
-}
+export { api, API_BASE_URL };

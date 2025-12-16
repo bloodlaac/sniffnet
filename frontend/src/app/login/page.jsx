@@ -2,77 +2,82 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "../../lib/apiFetch";
+import Button from "../components/ui/Button";
+import Card from "../components/ui/Card";
+import Input from "../components/ui/Input";
+import Toast from "../components/ui/Toast";
+import { login } from "@/lib/api";
+import { setUser } from "@/lib/session";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [toast, setToast] = useState({ message: "", variant: "info" });
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!username.trim() || !password.trim()) {
+      setToast({ message: "Заполните логин и пароль", variant: "warning" });
+      return;
+    }
+
+    setLoading(true);
+    setToast({ message: "", variant: "info" });
     try {
-      const result = await apiFetch("/auth/login", {
-        method: "POST",
-        body: { username, password },
-      });
-      localStorage.setItem("user_id", result.user_id);
-      router.push("/experiments");
+      const user = await login(username, password);
+      setUser(user);
+      router.replace("/experiments");
     } catch (err) {
-      setError("Неверные данные для входа");
+      setToast({
+        message: err.message || "Неверные данные для входа",
+        variant: "error",
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white p-8 rounded shadow-md w-full max-w-sm"
-      >
-        <h1 className="text-2xl font-semibold mb-6 text-center">
-          Вход в систему
-        </h1>
+    <div className="flex min-h-[calc(100vh-120px)] items-center justify-center">
+      <Card className="w-full max-w-md p-8">
+        <div className="mb-6 space-y-2 text-center">
+          <p className="text-sm uppercase tracking-wide text-blue-600">Вход</p>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Авторизация
+          </h1>
+        </div>
 
-        {error && (
-          <div className="mb-4 text-red-600 text-sm">
-            Ошибка: {error}
+        {toast.message && (
+          <div className="mb-4">
+            <Toast
+              message={toast.message}
+              variant={toast.variant}
+              onClose={() => setToast({ message: "", variant: "info" })}
+            />
           </div>
         )}
 
-        <label htmlFor="username" className="block mb-2 font-medium">
-          Логин
-        </label>
-        <input
-          id="username"
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Введите логин"
-          className="w-full px-3 py-2 border rounded mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          required
-        />
-
-        <label htmlFor="password" className="block mb-2 font-medium">
-          Пароль
-        </label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Введите пароль"
-          className="w-full px-3 py-2 border rounded mb-6 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          required
-        />
-
-        <button
-          type="submit"
-          className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-        >
-          Войти
-        </button>
-      </form>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label="Логин"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+          />
+          <Input
+            label="Пароль"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? "Входим..." : "Войти"}
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }

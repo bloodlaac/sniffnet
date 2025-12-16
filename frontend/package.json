@@ -9,9 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "chart.js": "^4.4.6",
     "next": "^16.0.10",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-chartjs-2": "^5.2.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
