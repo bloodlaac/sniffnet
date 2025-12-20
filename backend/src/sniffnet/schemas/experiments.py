@@ -1,6 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
+from sniffnet.schemas.training_configs import TrainingConfigCreate
 
 
 class ExperimentBase(BaseModel):
@@ -9,35 +10,50 @@ class ExperimentBase(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class TrainingConfigCreate(BaseModel):
-    epochs_num: int
-    batch_size: int
-    loss_function: str
-    learning_rate: float
-    optimizer: str
-    layers_num: int
-    neurons_num: int
-
 class CreateExperimentRequest(BaseModel):
     user_id: int
     dataset_id: int
     config: TrainingConfigCreate
 
+
+class StartExperimentRequest(BaseModel):
+    user_id: Optional[int] = None
+    dataset_id: int
+    config: TrainingConfigCreate
+
+
+class StartExperimentResponse(BaseModel):
+    experiment_id: int
+    status: str
+
+
+class TrainExperimentRequest(BaseModel):
+    dataset_id: int
+    training_config_id: int
+    user_id: Optional[int] = None
+
+
+class TrainExperimentResponse(BaseModel):
+    experiment_id: int
+    status: str
+
 class ExperimentJoined(BaseModel):
     experiment_id: int
     dataset_id: int
     config_id: int
-    user_id: int
+    user_id: Optional[int]
+    model_id: Optional[int]
     start_time: datetime
     end_time: Optional[datetime]
+    status: Optional[str] = None
+    error_message: Optional[str] = None
 
     batch_size: int
     epochs_num: int
     loss_function: str
     learning_rate: float
     optimizer: str
-    layers_num: int
-    neurons_num: int
+    val_split: float
 
     train_accuracy: Optional[float] = None
     train_loss: Optional[float] = None

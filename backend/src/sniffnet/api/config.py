@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 
-DEFAULT_WEIGHTS_PATH = Path(__file__).resolve().parents[3] / "artifacts" / "models" / "model.pth"
+DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[3] / "artifacts" / "models"
+DEFAULT_WEIGHTS_PATH = DEFAULT_MODELS_DIR / "model.pth"
 
+MODEL_WEIGHTS_DIR = Path(os.getenv("MODEL_WEIGHTS_DIR", DEFAULT_MODELS_DIR))
 MODEL_WEIGHTS_PATH = Path(os.getenv("MODEL_WEIGHTS_PATH", DEFAULT_WEIGHTS_PATH))
 MODEL_DEVICE = os.getenv("MODEL_DEVICE", "cpu")

@@ -6,7 +6,7 @@ from sniffnet.core import model_loader
 router = APIRouter(tags=["model"])
 
 
-@router.post("/api/model/load")
+@router.post("/model/load")
 def load_model():
     if model_loader.is_loaded():
         return {"status": "already_loaded"}

@@ -34,15 +34,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(datasets.router)
-app.include_router(experiments.router)
-app.include_router(metrics.router)
-app.include_router(models.router)
-app.include_router(training_configs.router)
-app.include_router(users.router)
-app.include_router(auth.router)
-app.include_router(predict.router)
-app.include_router(model_load.router)
+api_prefix = "/api"
+app.include_router(datasets.router, prefix=api_prefix)
+app.include_router(experiments.router, prefix=api_prefix)
+app.include_router(metrics.router, prefix=api_prefix)
+app.include_router(models.router, prefix=api_prefix)
+app.include_router(training_configs.router, prefix=api_prefix)
+app.include_router(users.router, prefix=api_prefix)
+app.include_router(auth.router, prefix=api_prefix)
+app.include_router(predict.router, prefix=api_prefix)
+app.include_router(model_load.router, prefix=api_prefix)
 
 @app.get("/")
 def get_main_page():

@@ -16,6 +16,7 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classifica
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from sniffnet.core.resnet_model import create_resnet18
 
 path = kagglehub.dataset_download("bloodlaac/products-dataset")
 
@@ -30,8 +31,6 @@ blocks_num_list = [2, 2, 2, 2]
 logger = logging.getLogger(__name__)
 FOOD_CLASSES = ["Fresh", "Bad"]
 CLASS_TO_IDX = {name: idx for idx, name in enumerate(FOOD_CLASSES)}
-
-criterion = nn.CrossEntropyLoss()
 
 food_dir = Path(f"{path}/products_dataset")
 
@@ -90,25 +89,7 @@ eval_transforms = T.Compose([
 ])
 
 food_dataset = LabeledDataset(food_dir, FOOD_CLASSES)
-
-train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
-    food_dataset, [0.6, 0.2, 0.2]
-)
-
-train_dataset.dataset.transform = train_transforms
-val_dataset.dataset.transform = eval_transforms
-test_dataset.dataset.transform = eval_transforms
-
-train_dataloader = DataLoader(
-  train_dataset,
-  batch_size=16,
-  shuffle=True,
-  num_workers=0,
-  #pin_memory=True
-)
-
-val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-test_dataloader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+DEFAULT_TEST_SPLIT = 0.2
 
 class Block(nn.Module):
     """
@@ -441,64 +422,129 @@ def save_checkpoint(
 
     return result
 
-model = ResNet(blocks_num_list).to(device)
 
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+def build_dataloaders(batch_size: int, val_split: float):
+    dataset_len = len(food_dataset)
+    val_size = int(dataset_len * val_split)
+    test_size = int(dataset_len * DEFAULT_TEST_SPLIT)
+    train_size = dataset_len - val_size - test_size
+    if train_size <= 0:
+        raise ValueError("val_split слишком большой для текущего датасета")
 
-print(f"Training ResNet18 with SGD\n")
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
+        food_dataset, [train_size, val_size, test_size]
+    )
 
-train_acc, train_loss, val_acc, val_loss = train(
-    model,
-    criterion,
-    train_dataloader,
-    val_dataloader,
-    optimizer=optimizer,
-    epochs=20
-)
+    train_dataset.dataset.transform = train_transforms
+    val_dataset.dataset.transform = eval_transforms
+    test_dataset.dataset.transform = eval_transforms
 
-# fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+    )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-# ax1.plot(np.arange(20), train_acc, label="Train accuracy")
-# ax1.plot(np.arange(20), val_acc, label="Validation accuracy")
-# ax2.plot(np.arange(20), train_loss, label="Train loss")
-# ax2.plot(np.arange(20), val_loss, label="Validation loss")
-
-# ax1.set_title("Accuracy on 20 epochs")
-# ax1.set_xlabel("Epochs")
-# ax1.set_ylabel("Accuracy")
-# ax1.legend()
-# ax1.grid(True)
-
-# ax2.set_title("Loss on 20 epochs")
-# ax2.set_xlabel("Epochs")
-# ax2.set_ylabel("Loss")
-# ax2.legend()
-# ax2.grid(True)
-
-# plt.show()
-
-test_acc, test_loss, cm, report = test(model, test_dataloader, criterion)
-
-print(f"\nTest accuracy: {test_acc:.4f}")
-print(f"\nTest loss: {test_loss:.4f}")
-print(f"\nReport:\n{report}")
+    return train_loader, val_loader, test_loader
 
 
-# fig, ax = plt.subplots(figsize=(12, 12))
+def build_optimizer(name: str, params, learning_rate: float):
+    normalized = name.strip().lower()
+    if normalized == "sgd":
+        return optim.SGD(params, lr=learning_rate, momentum=0.9)
+    if normalized == "adam":
+        return optim.Adam(params, lr=learning_rate)
+    raise ValueError(f"Unsupported optimizer: {name}")
 
-# disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=FOOD_CLASSES)
-# disp.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
-# ax.set_title("Confusion Matrix")
 
-# plt.tight_layout()
-# plt.show()
+def build_criterion(name: str):
+    normalized = name.strip().lower()
+    if normalized in {"crossentropy", "crossentropyloss", "ce"}:
+        return nn.CrossEntropyLoss()
+    raise ValueError(f"Unsupported loss function: {name}")
 
-out = Path("../../../artifacts/models").resolve()
-checkpoint_path = out / "model.pth"
-save_info = save_checkpoint(
-    model,
-    checkpoint_path,
-    classes=FOOD_CLASSES,
-    class_to_idx=CLASS_TO_IDX,
-)
-print(f"Saved: {checkpoint_path}")
+
+def train_with_config(
+    epochs_num: int,
+    batch_size: int,
+    learning_rate: float,
+    optimizer_name: str,
+    loss_function: str,
+    val_split: float,
+    checkpoint_path: Path | None = None,
+):
+    model = create_resnet18(num_classes=len(FOOD_CLASSES)).to(device)
+    criterion = build_criterion(loss_function)
+    optimizer = build_optimizer(optimizer_name, model.parameters(), learning_rate)
+
+    train_loader, val_loader, test_loader = build_dataloaders(batch_size, val_split)
+
+    train_acc, train_loss, val_acc, val_loss = train(
+        model,
+        criterion,
+        train_loader,
+        val_loader,
+        optimizer=optimizer,
+        epochs=epochs_num,
+    )
+
+    test_acc, test_loss, _, _ = test(model, test_loader, criterion)
+
+    save_info = None
+    if checkpoint_path is not None:
+        save_info = save_checkpoint(
+            model,
+            checkpoint_path,
+            classes=FOOD_CLASSES,
+            class_to_idx=CLASS_TO_IDX,
+        )
+
+    return {
+        "train_accuracy": train_acc[-1] if train_acc else None,
+        "train_loss": train_loss[-1] if train_loss else None,
+        "val_accuracy": val_acc[-1] if val_acc else None,
+        "val_loss": val_loss[-1] if val_loss else None,
+        "test_accuracy": test_acc,
+        "test_loss": test_loss,
+        "train_accuracy_history": train_acc,
+        "train_loss_history": train_loss,
+        "val_accuracy_history": val_acc,
+        "val_loss_history": val_loss,
+        "checkpoint": save_info,
+    }
+
+
+if __name__ == "__main__":
+    model = ResNet(blocks_num_list).to(device)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+    print("Training ResNet18 with SGD\n")
+
+    train_loader, val_loader, test_loader = build_dataloaders(batch_size=16, val_split=0.2)
+    train_acc, train_loss, val_acc, val_loss = train(
+        model,
+        nn.CrossEntropyLoss(),
+        train_loader,
+        val_loader,
+        optimizer=optimizer,
+        epochs=20,
+    )
+
+    test_acc, test_loss, cm, report = test(model, test_loader, nn.CrossEntropyLoss())
+
+    print(f"\nTest accuracy: {test_acc:.4f}")
+    print(f"\nTest loss: {test_loss:.4f}")
+    print(f"\nReport:\n{report}")
+
+    out = Path("../../../artifacts/models").resolve()
+    checkpoint_path = out / "model.pth"
+    save_checkpoint(
+        model,
+        checkpoint_path,
+        classes=FOOD_CLASSES,
+        class_to_idx=CLASS_TO_IDX,
+    )
+    print(f"Saved: {checkpoint_path}")

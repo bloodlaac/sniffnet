@@ -1,13 +1,16 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ConfigRequest(BaseModel):
+class TrainingConfigCreate(BaseModel):
     epochs_num: int
     batch_size: int
     loss_function: str
     learning_rate: float
     optimizer: str
-    layers_num: int
-    neurons_num: int
+    val_split: float = Field(default=0.2, gt=0, lt=1)
+
+
+class TrainingConfigResponse(TrainingConfigCreate):
+    training_config_id: int
 
     model_config = ConfigDict(from_attributes=True)

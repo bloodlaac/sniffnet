@@ -2,99 +2,115 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-  Legend,
-} from "chart.js";
+import { useParams } from "next/navigation";
 import Badge from "../../components/ui/Badge";
 import Button from "../../components/ui/Button";
 import Card from "../../components/ui/Card";
 import Toast from "../../components/ui/Toast";
 import { getDatasets, getExperiment } from "@/lib/api";
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
-
 const formatDateTime = (value) => {
   if (!value) return "—";
   return new Date(value).toLocaleString("ru-RU");
 };
 
-export default function ExperimentDetails({ params }) {
+const formatPercent = (value) => {
+  if (typeof value !== "number") return "—";
+  return `${Math.round(value * 100)}%`;
+};
+
+export default function ExperimentDetails() {
+  const routeParams = useParams();
+  const rawId = routeParams?.id;
+  const experimentId = Array.isArray(rawId) ? rawId[0] : rawId;
   const [experiment, setExperiment] = useState(null);
   const [datasetName, setDatasetName] = useState("");
   const [toast, setToast] = useState({ message: "", variant: "info" });
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const normalizeError = (err) => {
+    if (!err) return "Неизвестная ошибка";
+    if (typeof err === "string") return err;
+    if (err instanceof Error) return err.message;
+    if (typeof err === "object") {
+      if (typeof err.detail === "string") return err.detail;
+      if (typeof err.message === "string") return err.message;
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return "Ошибка";
+      }
+    }
+    return String(err);
+  };
 
   useEffect(() => {
+    if (!experimentId) return;
+    let intervalId;
     const load = async () => {
       setLoading(true);
       try {
         const [expData, datasets] = await Promise.all([
-          getExperiment(params.id),
+          getExperiment(experimentId),
           getDatasets(),
         ]);
         setExperiment(expData);
         const ds = datasets.find((d) => d.dataset_id === expData.dataset_id);
         setDatasetName(ds?.name || `Датасет ${expData.dataset_id}`);
+        setErrorMessage("");
       } catch (err) {
-        setToast({
-          message: err.message || "Не удалось загрузить эксперимент",
-          variant: "error",
-        });
+        const message = normalizeError(err);
+        setErrorMessage(message);
+        setToast({ message, variant: "error" });
       } finally {
         setLoading(false);
       }
     };
 
+    const poll = async () => {
+      try {
+        const expData = await getExperiment(experimentId);
+        setExperiment(expData);
+        setErrorMessage("");
+      } catch (err) {
+        const message = normalizeError(err);
+        setErrorMessage(message);
+        setToast({ message, variant: "error" });
+      }
+    };
+
     load();
-  }, [params.id]);
+    intervalId = setInterval(() => {
+      if (experiment?.status === "queued" || experiment?.status === "running") {
+        poll();
+      }
+    }, 5000);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [experimentId, experiment?.status]);
 
   const status = useMemo(() => {
     if (!experiment) return { label: "—", variant: "neutral" };
-    return experiment.end_time
-      ? { label: "Завершён", variant: "success" }
-      : { label: "В процессе", variant: "warning" };
+    switch (experiment.status) {
+      case "queued":
+        return { label: "В очереди", variant: "warning" };
+      case "running":
+        return { label: "В процессе", variant: "warning" };
+      case "failed":
+        return { label: "Ошибка", variant: "error" };
+      case "success":
+        return { label: "Завершён", variant: "success" };
+      default:
+        return experiment.end_time
+          ? { label: "Завершён", variant: "success" }
+          : { label: "В процессе", variant: "warning" };
+    }
   }, [experiment]);
 
-  const accuracyHistory =
-    experiment?.accuracy_history || experiment?.train_accuracy_history;
-  const lossHistory = experiment?.loss_history || experiment?.train_loss_history;
-
-  const hasSeries =
-    (Array.isArray(accuracyHistory) && accuracyHistory.length > 1) ||
-    (Array.isArray(lossHistory) && lossHistory.length > 1);
-
-  const chartData = useMemo(() => {
-    const labels =
-      (accuracyHistory || lossHistory || []).map((_, idx) => `Эпоха ${idx + 1}`);
-    const datasets = [];
-
-    if (Array.isArray(accuracyHistory) && accuracyHistory.length) {
-      datasets.push({
-        label: "Accuracy",
-        data: accuracyHistory,
-        borderColor: "rgb(59, 130, 246)",
-        backgroundColor: "rgba(59, 130, 246, 0.15)",
-        tension: 0.3,
-      });
-    }
-    if (Array.isArray(lossHistory) && lossHistory.length) {
-      datasets.push({
-        label: "Loss",
-        data: lossHistory,
-        borderColor: "rgb(239, 68, 68)",
-        backgroundColor: "rgba(239, 68, 68, 0.12)",
-        tension: 0.3,
-      });
-    }
-    return { labels, datasets };
-  }, [accuracyHistory, lossHistory]);
+  const canShowReport = experiment?.status === "success";
 
   if (loading) {
     return (
@@ -115,7 +131,9 @@ export default function ExperimentDetails({ params }) {
           />
         )}
         <Card className="p-6">
-          <p className="text-slate-700">Эксперимент не найден.</p>
+          <p className="text-slate-700">
+            {errorMessage || "Эксперимент не найден."}
+          </p>
           <div className="mt-4">
             <Link href="/experiments">
               <Button variant="secondary">Вернуться к списку</Button>
@@ -135,7 +153,7 @@ export default function ExperimentDetails({ params }) {
           </p>
           <h1 className="text-3xl font-bold text-slate-900">{datasetName}</h1>
           <p className="text-sm text-slate-600">
-            Пользователь: {experiment.user_id}. Конфигурация {experiment.config_id}.
+            Пользователь: {experiment.user_id ?? "—"}. Конфигурация {experiment.config_id}.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -221,58 +239,36 @@ export default function ExperimentDetails({ params }) {
           <InfoCell label="Learning rate" value={experiment.learning_rate} />
           <InfoCell label="Optimizer" value={experiment.optimizer} />
           <InfoCell label="Loss function" value={experiment.loss_function} />
-          <InfoCell label="Layers" value={experiment.layers_num} />
-          <InfoCell label="Neurons" value={experiment.neurons_num} />
+          <InfoCell
+            label="Validation split"
+            value={formatPercent(experiment.val_split)}
+          />
+          <InfoCell label="Model ID" value={experiment.model_id ?? "—"} />
         </div>
       </Card>
-
-      <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+      {experiment.error_message && (
         <Card className="p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Графики обучения
-            </h2>
-            <Badge variant={hasSeries ? "info" : "neutral"}>
-              {hasSeries ? "по эпохам" : "нет данных по эпохам"}
-            </Badge>
-          </div>
-          <div className="mt-4 min-h-[260px]">
-            {hasSeries ? (
-              <Line
-                data={chartData}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    legend: { position: "bottom" },
-                  },
-                }}
-              />
-            ) : (
-              <div className="flex h-full min-h-[240px] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-600">
-                Backend пока отдаёт только финальные значения. Добавьте историю по эпохам, чтобы увидеть график.
-              </div>
-            )}
-          </div>
+          <p className="text-sm text-rose-600">
+            Ошибка обучения: {experiment.error_message}
+          </p>
         </Card>
+      )}
 
-        <Card className="p-5 space-y-3">
-          <h2 className="text-lg font-semibold text-slate-900">Данные графиков</h2>
+      <Card className="p-5 space-y-3">
+        <h2 className="text-lg font-semibold text-slate-900">Отчёт эксперимента</h2>
+        {!canShowReport && (
           <p className="text-sm text-slate-600">
-            Сейчас backend возвращает финальные показатели train_accuracy и train_loss. Когда появятся значения по эпохам,
-            они автоматически отобразятся на графике выше.
+            Отчёт будет доступен после завершения обучения.
           </p>
-          <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase text-slate-500">Финальные значения</p>
-            <ul className="mt-2 space-y-1 text-sm text-slate-700">
-              <li>Accuracy: {experiment.train_accuracy ?? "нет"}</li>
-              <li>Loss: {experiment.train_loss ?? "нет"}</li>
-            </ul>
-          </div>
-          <p className="text-xs text-slate-500">
-            Поддерживаются массивы accuracy_history и loss_history, чтобы строить кривые обучения.
-          </p>
-        </Card>
-      </div>
+        )}
+        {canShowReport && (
+          <img
+            alt={`Отчёт эксперимента ${experiment.experiment_id}`}
+            src={`/api/experiments/${experiment.experiment_id}/report`}
+            className="w-full rounded-xl border border-slate-200"
+          />
+        )}
+      </Card>
     </div>
   );
 }

@@ -61,14 +61,14 @@ def test_auth_login_success_and_failure(test_db_and_client):
         user = seed_user(session, username="alice", password="wonder", email="a@example.com")
 
         # Successful login
-        resp_ok = client.post("/auth/login", json={"username": "alice", "password": "wonder"})
+        resp_ok = client.post("/api/auth/login", json={"username": "alice", "password": "wonder"})
         assert resp_ok.status_code == 200
         body = resp_ok.json()
         assert body["user_id"] == user.user_id
         assert body["username"] == "alice"
 
         # Failed login (wrong password)
-        resp_bad = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
+        resp_bad = client.post("/api/auth/login", json={"username": "alice", "password": "wrong"})
         assert resp_bad.status_code == 401
     finally:
         session.close()
@@ -78,7 +78,7 @@ def test_create_dataset_and_persisted_in_db(test_db_and_client):
     engine, SessionLocal, client = test_db_and_client
     # Create via API (DatasetRequest requires explicit IDs in this API)
     payload = {"dataset_id": 1, "name": "Food", "classes_num": 4, "source": "local"}
-    resp = client.post("/datasets", json=payload)
+    resp = client.post("/api/datasets", json=payload)
     assert resp.status_code == 200
 
     # Verify DB has the record
@@ -101,15 +101,15 @@ def test_create_training_config_via_api(test_db_and_client):
         "loss_function": "MSELoss",
         "learning_rate": 0.01,
         "optimizer": "Adam",
-        "layers_num": 2,
-        "neurons_num": 16,
+        "val_split": 0.2,
     }
-    resp = client.post("/configurations", json=cfg_payload)
+    resp = client.post("/api/training-configs", json=cfg_payload)
     assert resp.status_code == 200
     body = resp.json()
-    # Response model excludes ID; validate echo of fields
+    # Response model includes ID; validate echo of fields
     for k, v in cfg_payload.items():
         assert body[k] == v
+    assert "training_config_id" in body
 
 
 def test_experiment_creation_and_fetch_joined_view(test_db_and_client):
@@ -119,25 +119,31 @@ def test_experiment_creation_and_fetch_joined_view(test_db_and_client):
         user = seed_user(session)
         ds = seed_dataset(session)
 
-        exp_req = {
-            "user_id": user.user_id,
-            "dataset_id": ds.dataset_id,
-            "config": {
-                "epochs_num": 3,
-                "batch_size": 8,
-                "loss_function": "MSELoss",
-                "learning_rate": 0.01,
-                "optimizer": "Adam",
-                "layers_num": 2,
-                "neurons_num": 16,
-            },
+        cfg_payload = {
+            "epochs_num": 3,
+            "batch_size": 8,
+            "loss_function": "MSELoss",
+            "learning_rate": 0.01,
+            "optimizer": "Adam",
+            "val_split": 0.2,
         }
-        create_resp = client.post("/experiments", json=exp_req)
+        cfg_resp = client.post("/api/training-configs", json=cfg_payload)
+        assert cfg_resp.status_code == 200
+        cfg_id = cfg_resp.json()["training_config_id"]
+
+        create_resp = client.post(
+            "/api/experiments/train",
+            json={
+                "user_id": user.user_id,
+                "dataset_id": ds.dataset_id,
+                "training_config_id": cfg_id,
+            },
+        )
         assert create_resp.status_code == 200
         exp_id = create_resp.json()["experiment_id"]
 
         # Joined view contains config fields and optional metrics
-        get_resp = client.get(f"/experiments/{exp_id}")
+        get_resp = client.get(f"/api/experiments/{exp_id}")
         assert get_resp.status_code == 200
         joined = get_resp.json()
         assert joined["experiment_id"] == exp_id
@@ -148,8 +154,7 @@ def test_experiment_creation_and_fetch_joined_view(test_db_and_client):
         assert joined["loss_function"] == "MSELoss"
         assert joined["learning_rate"] == 0.01
         assert joined["optimizer"] == "Adam"
-        assert joined["layers_num"] == 2
-        assert joined["neurons_num"] == 16
+        assert joined["val_split"] == 0.2
         # No metrics yet
         assert joined["train_accuracy"] is None
         assert joined["train_loss"] is None
@@ -165,20 +170,26 @@ def test_metrics_reflected_in_experiment_join(test_db_and_client):
         ds = seed_dataset(session)
 
         # Create experiment with a new training config
-        exp_req = {
-            "user_id": user.user_id,
-            "dataset_id": ds.dataset_id,
-            "config": {
-                "epochs_num": 2,
-                "batch_size": 4,
-                "loss_function": "MSELoss",
-                "learning_rate": 0.02,
-                "optimizer": "Adam",
-                "layers_num": 1,
-                "neurons_num": 8,
-            },
+        cfg_payload = {
+            "epochs_num": 2,
+            "batch_size": 4,
+            "loss_function": "MSELoss",
+            "learning_rate": 0.02,
+            "optimizer": "Adam",
+            "val_split": 0.2,
         }
-        create_resp = client.post("/experiments", json=exp_req)
+        cfg_resp = client.post("/api/training-configs", json=cfg_payload)
+        assert cfg_resp.status_code == 200
+        cfg_id = cfg_resp.json()["training_config_id"]
+
+        create_resp = client.post(
+            "/api/experiments/train",
+            json={
+                "user_id": user.user_id,
+                "dataset_id": ds.dataset_id,
+                "training_config_id": cfg_id,
+            },
+        )
         assert create_resp.status_code == 200
         exp_id = create_resp.json()["experiment_id"]
 
@@ -198,11 +209,11 @@ def test_metrics_reflected_in_experiment_join(test_db_and_client):
             "train_accuracy": 0.9,
             "train_loss": 0.5,
         }
-        m_resp = client.post("/metrics", json=metric_payload)
+        m_resp = client.post("/api/metrics", json=metric_payload)
         assert m_resp.status_code == 200
 
         # Now the experiment joined view should include metrics
-        get_resp = client.get(f"/experiments/{exp_id}")
+        get_resp = client.get(f"/api/experiments/{exp_id}")
         assert get_resp.status_code == 200
         joined = get_resp.json()
         assert joined["train_accuracy"] == pytest.approx(0.9)
@@ -213,20 +224,20 @@ def test_metrics_reflected_in_experiment_join(test_db_and_client):
 
 def test_get_users_empty_list(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/users")
+    resp = client.get("/api/users")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_user_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/users/9999")
+    resp = client.get("/api/users/9999")
     assert resp.status_code == 404
 
 
 def test_delete_user_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.delete("/users/9999")
+    resp = client.delete("/api/users/9999")
     assert resp.status_code == 404
 
 
@@ -235,13 +246,13 @@ def test_seeded_user_list_and_fetch_by_id(test_db_and_client):
     session = SessionLocal()
     try:
         u = seed_user(session, username="bob", password="pw", email="b@example.com")
-        resp_list = client.get("/users")
+        resp_list = client.get("/api/users")
         assert resp_list.status_code == 200
         data = resp_list.json()
         assert isinstance(data, list) and len(data) == 1
         assert any(item.get("username") == "bob" for item in data)
 
-        resp_one = client.get(f"/users/{u.user_id}")
+        resp_one = client.get(f"/api/users/{u.user_id}")
         assert resp_one.status_code == 200
         assert resp_one.json().get("user_id") == u.user_id
     finally:
@@ -250,51 +261,51 @@ def test_seeded_user_list_and_fetch_by_id(test_db_and_client):
 
 def test_get_datasets_empty_list(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/datasets")
+    resp = client.get("/api/datasets")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_dataset_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/datasets/12345")
+    resp = client.get("/api/datasets/12345")
     assert resp.status_code == 404
 
 
 def test_get_models_empty_list(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/models")
+    resp = client.get("/api/models")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_model_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/models/1")
+    resp = client.get("/api/models/1")
     assert resp.status_code == 404
 
 
 def test_get_training_configs_empty_list(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/configurations")
+    resp = client.get("/api/training-configs")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_training_config_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/configurations/1")
+    resp = client.get("/api/training-configs/1")
     assert resp.status_code == 404
 
 
 def test_list_experiments_empty(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/experiments")
+    resp = client.get("/api/experiments")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_get_experiment_not_found(test_db_and_client):
     _, __, client = test_db_and_client
-    resp = client.get("/experiments/424242")
+    resp = client.get("/api/experiments/424242")
     assert resp.status_code == 404

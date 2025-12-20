@@ -19,6 +19,7 @@ _CLASS_TO_IDX = dict(_DEFAULT_CLASS_TO_IDX)
 _LOAD_THREAD = None
 _LOAD_ERROR = None
 _MODEL_HEALTH = None
+_CURRENT_WEIGHTS_PATH = None
 _LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,62 +52,69 @@ def start_load(weights_path: str, device: str) -> bool:
         return True
 
 
+def _load_model(weights_path: str, device: str):
+    torch_device = torch.device(device)
+    weights_file = Path(weights_path).expanduser().resolve()
+
+    model = create_resnet18(num_classes=2)
+    checkpoint = torch.load(weights_file, map_location=torch_device)
+
+    state_dict, checkpoint_format = extract_state_dict(checkpoint)
+    _LOGGER.info("Checkpoint format detected: %s", checkpoint_format)
+
+    classes = None
+    class_to_idx = None
+    if isinstance(checkpoint, dict):
+        classes = checkpoint.get("classes")
+        class_to_idx = checkpoint.get("class_to_idx")
+        if classes is not None and not isinstance(classes, list):
+            _LOGGER.warning("Invalid classes type in checkpoint (%s); ignoring", type(classes))
+            classes = None
+        if class_to_idx is not None and not isinstance(class_to_idx, dict):
+            _LOGGER.warning("Invalid class_to_idx type in checkpoint (%s); ignoring", type(class_to_idx))
+            class_to_idx = None
+
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except Exception as exc:
+        raise RuntimeError(f"load_state_dict failed with strict=True: {exc}") from exc
+    model.to(torch_device)
+    model.eval()
+
+    loaded_classes = classes if classes else list(_DEFAULT_CLASSES)
+    loaded_class_to_idx = class_to_idx if class_to_idx else dict(_DEFAULT_CLASS_TO_IDX)
+    if classes is None:
+        _LOGGER.warning("classes not found in checkpoint; using fallback order %s", loaded_classes)
+    if class_to_idx is None:
+        _LOGGER.warning("class_to_idx not found in checkpoint; using fallback mapping %s", loaded_class_to_idx)
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
+        ]
+    )
+
+    return model, transform, loaded_classes, loaded_class_to_idx
+
+
 def _load_worker(weights_path: str, device: str) -> None:
     """Load model weights and preprocessing pipeline in a background thread."""
-    global _MODEL, _TRANSFORM, _LOAD_ERROR, _MODEL_HEALTH
+    global _MODEL, _TRANSFORM, _LOAD_ERROR, _MODEL_HEALTH, _CURRENT_WEIGHTS_PATH
     try:
-        torch_device = torch.device(device)
-        weights_file = Path(weights_path).expanduser().resolve()
-
-        model = create_resnet18(num_classes=2)
-        checkpoint = torch.load(weights_file, map_location=torch_device)
-
-        state_dict, checkpoint_format = extract_state_dict(checkpoint)
-        _LOGGER.info("Checkpoint format detected: %s", checkpoint_format)
-
-        classes = None
-        class_to_idx = None
-        if isinstance(checkpoint, dict):
-            classes = checkpoint.get("classes")
-            class_to_idx = checkpoint.get("class_to_idx")
-            if classes is not None and not isinstance(classes, list):
-                _LOGGER.warning("Invalid classes type in checkpoint (%s); ignoring", type(classes))
-                classes = None
-            if class_to_idx is not None and not isinstance(class_to_idx, dict):
-                _LOGGER.warning("Invalid class_to_idx type in checkpoint (%s); ignoring", type(class_to_idx))
-                class_to_idx = None
-
-        try:
-            model.load_state_dict(state_dict, strict=True)
-        except Exception as exc:
-            raise RuntimeError(f"load_state_dict failed with strict=True: {exc}") from exc
-        model.to(torch_device)
-        model.eval()
-
-        loaded_classes = classes if classes else list(_DEFAULT_CLASSES)
-        loaded_class_to_idx = class_to_idx if class_to_idx else dict(_DEFAULT_CLASS_TO_IDX)
-        if classes is None:
-            _LOGGER.warning("classes not found in checkpoint; using fallback order %s", loaded_classes)
-        if class_to_idx is None:
-            _LOGGER.warning("class_to_idx not found in checkpoint; using fallback mapping %s", loaded_class_to_idx)
-
-        transform = transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225],
-                ),
-            ]
-        )
+        model, transform, classes, class_to_idx = _load_model(weights_path, device)
 
         with _LOCK:
             _MODEL = model
             _TRANSFORM = transform
             _LOAD_ERROR = None
-            _CLASSES = loaded_classes
-            _CLASS_TO_IDX = loaded_class_to_idx
+            _CLASSES = classes
+            _CLASS_TO_IDX = class_to_idx
+            _CURRENT_WEIGHTS_PATH = str(Path(weights_path).expanduser().resolve())
 
     except Exception:
         _LOGGER.exception("Failed to load model from %s", weights_path)
@@ -114,6 +122,7 @@ def _load_worker(weights_path: str, device: str) -> None:
             _MODEL = None
             _TRANSFORM = None
             _LOAD_ERROR = traceback.format_exc()
+            _CURRENT_WEIGHTS_PATH = None
 
 
 def get_model_blocking(timeout: float | None = None) -> Tuple[torch.nn.Module, transforms.Compose, List[str]]:
@@ -136,6 +145,24 @@ def get_model_blocking(timeout: float | None = None) -> Tuple[torch.nn.Module, t
             raise RuntimeError("model not loaded")
 
         return _MODEL, _TRANSFORM, _CLASSES
+
+
+def load_model_for_weights(weights_path: str, device: str):
+    global _MODEL, _TRANSFORM, _CLASSES, _CLASS_TO_IDX, _LOAD_ERROR, _CURRENT_WEIGHTS_PATH
+    resolved = str(Path(weights_path).expanduser().resolve())
+    with _LOCK:
+        if _MODEL is not None and _CURRENT_WEIGHTS_PATH == resolved:
+            return _MODEL, _TRANSFORM, _CLASSES
+
+    model, transform, classes, class_to_idx = _load_model(resolved, device)
+    with _LOCK:
+        _MODEL = model
+        _TRANSFORM = transform
+        _CLASSES = classes
+        _CLASS_TO_IDX = class_to_idx
+        _LOAD_ERROR = None
+        _CURRENT_WEIGHTS_PATH = resolved
+    return model, transform, classes
 
 
 def is_loaded() -> bool:

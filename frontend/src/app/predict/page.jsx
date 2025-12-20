@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import ImageUploader from "@/components/ImageUploader";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import Toast from "../components/ui/Toast";
 import Badge from "../components/ui/Badge";
-import { predict } from "@/lib/api";
+import Select from "../components/ui/Select";
+import { getModels, predict } from "@/lib/api";
 
 const classesMapping = {
   "Bad": "Испорченный",
@@ -19,10 +19,36 @@ export default function PredictPage() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ message: "", variant: "info" });
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadModels = async () => {
+      setModelsLoading(true);
+      try {
+        const data = await getModels();
+        setModels(Array.isArray(data) ? data : data?.items || []);
+      } catch (err) {
+        setToast({
+          message: err.message || "Не удалось загрузить список моделей",
+          variant: "error",
+        });
+      } finally {
+        setModelsLoading(false);
+      }
+    };
+
+    loadModels();
+  }, []);
 
   const handlePredict = async () => {
     if (!file) {
       setToast({ message: "Выберите изображение для проверки", variant: "warning" });
+      return;
+    }
+    if (!selectedModel) {
+      setToast({ message: "Выберите модель для инференса", variant: "warning" });
       return;
     }
 
@@ -31,7 +57,7 @@ export default function PredictPage() {
     setToast({ message: "Отправляем изображение в модель...", variant: "info" });
 
     try {
-      const data = await predict(file);
+      const data = await predict(file, selectedModel);
       setResult(data);
       setToast({ message: "Прогноз готов", variant: "success" });
     } catch (err) {
@@ -66,9 +92,38 @@ export default function PredictPage() {
             <h2 className="text-xl font-semibold text-slate-900">Загрузка изображения</h2>
             <Badge variant="info">JPEG/PNG</Badge>
           </div>
-          <ImageUploader valueFile={file} onChange={setFile} disabled={loading} />
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-slate-800">Выбор модели</p>
+            {modelsLoading ? (
+              <p className="text-sm text-slate-600">Загружаем список моделей...</p>
+            ) : models.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                Нет обученных моделей, сначала обучите модель.
+              </p>
+            ) : (
+              <Select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+              >
+                <option value="">Выберите модель</option>
+                {models.map((model) => (
+                <option key={model.model_id} value={model.model_id}>
+                    {`model${model.model_id}`}
+                </option>
+                ))}
+              </Select>
+            )}
+          </div>
+          <ImageUploader
+            valueFile={file}
+            onChange={setFile}
+            disabled={loading || !selectedModel}
+          />
           <div className="flex justify-end">
-            <Button onClick={handlePredict} disabled={loading}>
+            <Button
+              onClick={handlePredict}
+              disabled={loading || modelsLoading || models.length === 0 || !selectedModel}
+            >
               {loading ? "Отправляем..." : "Получить прогноз"}
             </Button>
           </div>

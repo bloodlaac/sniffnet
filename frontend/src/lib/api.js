@@ -1,5 +1,4 @@
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = "/api";
 
 function normalizePath(path = "") {
   return path.startsWith("/") ? path : `/${path}`;
@@ -19,7 +18,8 @@ async function api(path, options = {}) {
   const { headers, body, method = "GET", ...rest } = options;
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
 
-  const response = await fetch(`${API_BASE_URL}${normalizePath(path)}`, {
+  const url = `${API_BASE_URL}${normalizePath(path)}`;
+  const response = await fetch(url, {
     method,
     headers: isFormData
       ? headers
@@ -40,6 +40,7 @@ async function api(path, options = {}) {
     const err = new Error(message);
     err.status = response.status;
     err.data = data;
+    err.url = url;
     throw err;
   }
 
@@ -54,21 +55,21 @@ export const login = (username, password) =>
 
 export const getDatasets = () => api("/datasets");
 export const getModels = () => api("/models");
-export const getConfigs = () => api("/configurations");
 export const getExperiments = () => api("/experiments");
 export const getExperiment = (id) => api(`/experiments/${id}`);
 
-export const createExperiment = (payload) =>
-  api("/experiments", {
+export const startExperiment = (payload) =>
+  api("/experiments/train", {
     method: "POST",
     body: payload,
   });
 
-export const predict = (file) => {
+export const predict = (file, modelId) => {
   const form = new FormData();
   form.append("file", file);
+  form.append("model_id", modelId);
 
-  return api("/api/predict", {
+  return api("/predict", {
     method: "POST",
     body: form,
     headers: {},
