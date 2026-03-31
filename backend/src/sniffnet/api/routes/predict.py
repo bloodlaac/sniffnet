@@ -5,7 +5,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, status, Form, De
 from PIL import Image
 
 from sniffnet.api.config import MODEL_DEVICE, MODEL_WEIGHTS_DIR
-from sniffnet.core.model_loader import load_model_for_weights, get_model_health
+from sniffnet.core.model_loader import load_model_for_weights
 from sniffnet.api.deps import get_database
 from sniffnet.database.db_models import Model
 from sqlalchemy.orm import Session
@@ -59,13 +59,3 @@ async def predict(
         "confidence": float(probs[pred_idx]),
         "probs": probs_by_class,
     }
-
-
-@router.get("/model/health")
-async def model_health():
-    try:
-        health = get_model_health()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
-
-    return health

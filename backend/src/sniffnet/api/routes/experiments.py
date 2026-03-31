@@ -5,12 +5,9 @@ import threading
 import json
 from io import BytesIO
 from sniffnet.schemas.experiments import (
-    CreateExperimentRequest,
     ExperimentJoined,
     StartExperimentRequest,
     StartExperimentResponse,
-    TrainExperimentRequest,
-    TrainExperimentResponse,
 )
 from sqlalchemy.orm import Session
 from sniffnet.database.db_models import Experiment, TrainingConfig, Metric, Dataset, Model
@@ -38,6 +35,13 @@ def _ensure_utc(dt: datetime | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+def _fit_error_message(exc: Exception, limit: int = 255) -> str:
+    message = f"{type(exc).__name__}: {exc}".replace("\n", " ").strip()
+    if len(message) <= limit:
+        return message
+    return message[: limit - 3] + "..."
+
+
 def run_training_job(experiment_id: int) -> None:
     from sniffnet.database.db import SessionLocal
     from sniffnet.core.net import train_with_config
@@ -52,7 +56,7 @@ def run_training_job(experiment_id: int) -> None:
         if experiment is None:
             return
 
-        experiment.status = "running"
+        experiment.status = "RUNNING"
         experiment.error_message = None
         db.commit()
 
@@ -61,6 +65,10 @@ def run_training_job(experiment_id: int) -> None:
         model = Model(
             dataset_id=experiment.dataset_id,
             config_id=experiment.config_id,
+            experiment_id=experiment.experiment_id,
+            name=f"model-{experiment.experiment_id}",
+            training_time_seconds=0,
+            available_for_inference=False,
         )
         db.add(model)
         db.commit()
@@ -85,6 +93,8 @@ def run_training_job(experiment_id: int) -> None:
             config_id=experiment.config_id,
             train_accuracy=metrics.get("train_accuracy"),
             train_loss=metrics.get("train_loss"),
+            validation_accuracy=metrics.get("val_accuracy"),
+            validation_loss=metrics.get("val_loss"),
         )
         db.add(metric)
 
@@ -101,12 +111,19 @@ def run_training_job(experiment_id: int) -> None:
             )
 
         model.name = f"model{model.model_id}"
+        model.params_num = metrics.get("params_num")
         model.weights_path = weights_filename
+        model.available_for_inference = True
+        model.external_model_id = model.model_id
         if experiment.start_time:
-            model.training_time = datetime.now(timezone.utc) - experiment.start_time
-        experiment.model_id = model.model_id
-        experiment.status = "success"
+            start_time = _ensure_utc(experiment.start_time)
+            model.training_time_seconds = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
+        experiment.status = "COMPLETED"
         experiment.end_time = datetime.now(timezone.utc)
+        experiment.report_path = f"/api/experiments/{experiment.experiment_id}/report"
+        experiment.external_experiment_id = experiment.experiment_id
         db.commit()
 
     except Exception as exc:
@@ -117,9 +134,10 @@ def run_training_job(experiment_id: int) -> None:
             .first()
         )
         if experiment:
-            experiment.status = "failed"
-            experiment.error_message = str(exc)
+            experiment.status = "FAILED"
+            experiment.error_message = _fit_error_message(exc)
             experiment.end_time = datetime.now(timezone.utc)
+            experiment.external_experiment_id = experiment.experiment_id
             db.commit()
     finally:
         db.close()
@@ -149,7 +167,7 @@ def get_experiment_report(
     )
     if experiment is None:
         raise HTTPException(status_code=404, detail="Эксперимент не найден")
-    if experiment.status != "success":
+    if experiment.status != "COMPLETED":
         raise HTTPException(status_code=409, detail="Отчёт доступен после завершения обучения")
 
     cfg: TrainingConfig = experiment.config
@@ -260,11 +278,6 @@ def get_experiment_report(
     headers = {"Content-Disposition": f'inline; filename="{filename}"'}
     return StreamingResponse(buffer, media_type="image/png", headers=headers)
 
-@router.get("/experiments")
-def get_experiments(db: Annotated[Session, Depends(get_database)]):
-    return db.query(Experiment).all()
-
-
 @router.get("/experiments/{id}", response_model=ExperimentJoined)
 def get_experiment(
     id: int,
@@ -286,13 +299,18 @@ def get_experiment(
         .filter(Metric.config_id == cfg.config_id)
         .first()
     )
+    model = (
+        db.query(Model)
+        .filter(Model.experiment_id == experiment.experiment_id)
+        .first()
+    )
 
     return ExperimentJoined(
         experiment_id=experiment.experiment_id,
         dataset_id=experiment.dataset_id,
         config_id=experiment.config_id,
         user_id=experiment.user_id,
-        model_id=experiment.model_id,
+        model_id=model.model_id if model else None,
         start_time=_ensure_utc(experiment.start_time),
         end_time=_ensure_utc(experiment.end_time),
         status=experiment.status,
@@ -305,27 +323,10 @@ def get_experiment(
         val_split=cfg.val_split if cfg.val_split is not None else 0.2,
         train_accuracy=metric.train_accuracy if metric else None,
         train_loss=metric.train_loss if metric else None,
+        validation_accuracy=metric.validation_accuracy if metric else None,
+        validation_loss=metric.validation_loss if metric else None,
+        params_num=model.params_num if model else None,
     )
-
-
-@router.post("/experiments")
-def create_experiment(request: CreateExperimentRequest, db: Session = Depends(get_database)):
-    config = TrainingConfig(**request.config.model_dump())
-    db.add(config)
-    db.commit()
-    db.refresh(config)
-
-    experiment = Experiment(
-        user_id=request.user_id,
-        dataset_id=request.dataset_id,
-        config_id=config.config_id,
-        start_time=datetime.now(timezone.utc)
-    )
-    db.add(experiment)
-    db.commit()
-    db.refresh(experiment)
-
-    return {"experiment_id": experiment.experiment_id}
 
 
 @router.post("/experiments/train", response_model=StartExperimentResponse, status_code=202)
@@ -337,55 +338,45 @@ def start_experiment(
     if dataset is None:
         raise HTTPException(status_code=404, detail="Датасет не найден")
 
-    config = TrainingConfig(**request.config.model_dump())
-    db.add(config)
-    db.commit()
-    db.refresh(config)
+    if request.experiment_id is not None:
+        experiment = (
+            db.query(Experiment)
+            .filter(Experiment.experiment_id == request.experiment_id)
+            .first()
+        )
+        if experiment is None:
+            raise HTTPException(status_code=404, detail="Эксперимент не найден")
+        if experiment.dataset_id != request.dataset_id:
+            raise HTTPException(status_code=400, detail="dataset_id не совпадает с экспериментом")
+        if request.user_id is not None and experiment.user_id != request.user_id:
+            raise HTTPException(status_code=400, detail="user_id не совпадает с экспериментом")
+        if request.config_id is not None and experiment.config_id != request.config_id:
+            raise HTTPException(status_code=400, detail="config_id не совпадает с экспериментом")
 
-    experiment = Experiment(
-        user_id=request.user_id,
-        dataset_id=request.dataset_id,
-        config_id=config.config_id,
-        start_time=datetime.now(timezone.utc),
-        status="queued",
-    )
-    db.add(experiment)
-    db.commit()
-    db.refresh(experiment)
+        experiment.status = "CREATED"
+        experiment.error_message = None
+        experiment.end_time = None
+        experiment.report_path = None
+        experiment.external_experiment_id = experiment.experiment_id
+        db.commit()
+        db.refresh(experiment)
+    else:
+        config = TrainingConfig(**request.config.model_dump())
+        db.add(config)
+        db.commit()
+        db.refresh(config)
 
-    thread = threading.Thread(
-        target=run_training_job,
-        args=(experiment.experiment_id,),
-        daemon=True,
-    )
-    thread.start()
-
-    return {"experiment_id": experiment.experiment_id, "status": "queued"}
-
-
-@router.post("/experiments/run", response_model=TrainExperimentResponse, status_code=202)
-def train_experiment(
-    request: TrainExperimentRequest,
-    db: Session = Depends(get_database)
-):
-    config = (
-        db.query(TrainingConfig)
-        .filter(TrainingConfig.config_id == request.training_config_id)
-        .first()
-    )
-    if config is None:
-        raise HTTPException(status_code=404, detail="Конфигурация обучения не найдена")
-
-    experiment = Experiment(
-        user_id=request.user_id,
-        dataset_id=request.dataset_id,
-        config_id=config.config_id,
-        start_time=datetime.now(timezone.utc),
-        status="queued",
-    )
-    db.add(experiment)
-    db.commit()
-    db.refresh(experiment)
+        experiment = Experiment(
+            user_id=request.user_id,
+            dataset_id=request.dataset_id,
+            config_id=request.config_id or config.config_id,
+            start_time=datetime.now(timezone.utc),
+            status="CREATED",
+            external_experiment_id=None,
+        )
+        db.add(experiment)
+        db.commit()
+        db.refresh(experiment)
 
     thread = threading.Thread(
         target=run_training_job,
@@ -394,4 +385,4 @@ def train_experiment(
     )
     thread.start()
 
-    return {"experiment_id": experiment.experiment_id, "status": "started"}
+    return {"experiment_id": experiment.experiment_id, "status": "CREATED"}
