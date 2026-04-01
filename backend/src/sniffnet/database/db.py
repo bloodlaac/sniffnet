@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import os
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
 
 DB_USER = os.getenv("DB_USER", "bloodlaac")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "1")
@@ -13,8 +16,15 @@ DATABASE_URL = os.getenv(
     f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}",
 )
 
-engine = create_engine(DATABASE_URL)
+connect_args: dict[str, object] = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
 
-Base = declarative_base()
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
-SessionLocal = sessionmaker(bind=engine)
+
+class Base(DeclarativeBase):
+    pass
+
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

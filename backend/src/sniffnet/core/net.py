@@ -4,7 +4,6 @@ import copy
 import logging
 from pathlib import Path
 
-import kagglehub
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -30,6 +29,7 @@ CLASS_TO_IDX = {name: idx for idx, name in enumerate(FOOD_CLASSES)}
 DEFAULT_TRAIN_SPLIT = 0.6
 DEFAULT_VAL_SPLIT = 0.2
 DEFAULT_SEED = 42
+DEFAULT_DATASET_DIR = (Path(__file__).resolve().parents[5] / "datasets" / "v3").resolve()
 
 torch.manual_seed(DEFAULT_SEED)
 np.random.seed(DEFAULT_SEED)
@@ -85,27 +85,15 @@ class LabeledDataset(Dataset):
 
 
 def resolve_food_dir(food_dir: Path | str | None = None) -> Path:
-    if food_dir is not None:
-        resolved = Path(food_dir).expanduser().resolve()
-        if not resolved.exists():
-            raise FileNotFoundError(f"Dataset directory not found: {resolved}")
-        return resolved
-
-    download_root = Path(kagglehub.dataset_download("bloodlaac/products-dataset")).resolve()
-    candidates = [
-        download_root / "v3",
-        download_root / "products_dataset",
-        download_root,
-    ]
-
-    for candidate in candidates:
-        if all((candidate / cls_name).exists() for cls_name in FOOD_CLASSES):
-            return candidate
-
-    raise FileNotFoundError(
-        "Could not detect dataset root automatically. "
-        f"Checked: {', '.join(str(path) for path in candidates)}"
-    )
+    resolved = Path(food_dir or DEFAULT_DATASET_DIR).expanduser().resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {resolved}")
+    missing_classes = [cls_name for cls_name in FOOD_CLASSES if not (resolved / cls_name).exists()]
+    if missing_classes:
+        raise FileNotFoundError(
+            f"Dataset directory {resolved} is missing class folders: {', '.join(missing_classes)}"
+        )
+    return resolved
 
 
 def _split_indices(

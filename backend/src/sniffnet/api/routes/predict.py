@@ -1,14 +1,17 @@
+from __future__ import annotations
+
 from io import BytesIO
 
 import torch
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Form, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from PIL import Image
+from sqlalchemy.orm import Session
 
 from sniffnet.api.config import MODEL_DEVICE, MODEL_WEIGHTS_DIR
-from sniffnet.core.model_loader import load_model_for_weights
 from sniffnet.api.deps import get_database
+from sniffnet.core.model_loader import load_model_for_weights
 from sniffnet.database.db_models import Model
-from sqlalchemy.orm import Session
+
 
 router = APIRouter(tags=["predict"])
 
@@ -19,39 +22,32 @@ async def predict(
     model_id: int = Form(...),
     db: Session = Depends(get_database),
 ):
-    model_row = db.query(Model).filter(Model.model_id == model_id).first()
+    model_row = db.get(Model, model_id)
     if model_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Модель не найдена")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     if not model_row.weights_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл весов не указан")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model is not available for inference")
 
     weights_path = MODEL_WEIGHTS_DIR / model_row.weights_path
     if not weights_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл весов не найден")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model weights file not found")
 
+    image_bytes = await file.read()
     try:
-        image_bytes = await file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
-
-    try:
         model, transform, classes = load_model_for_weights(str(weights_path), MODEL_DEVICE)
-    except RuntimeError as exc:
-        message = str(exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     tensor = transform(image).unsqueeze(0)
     device = next(model.parameters()).device
     tensor = tensor.to(device)
-
     with torch.no_grad():
         logits = model(tensor)
         probs_tensor = torch.softmax(logits, dim=1)[0]
 
     probs = probs_tensor.cpu().tolist()
     pred_idx = int(probs_tensor.argmax().item())
-
     probs_by_class = {classes[i]: float(probs[i]) for i in range(min(len(classes), len(probs)))}
 
     return {
