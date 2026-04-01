@@ -1,62 +1,75 @@
 from __future__ import annotations
+
+import copy
 import logging
-from typing import Callable
+from pathlib import Path
 
 import kagglehub
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
-from matplotlib import cm
-from pathlib import Path
 from PIL import Image
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classification_report
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report, confusion_matrix
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
-from sniffnet.core.resnet_model import create_resnet18
 
-path = kagglehub.dataset_download("bloodlaac/products-dataset")
+from sniffnet.core.resnet_model import (
+    IMAGE_MEAN,
+    IMAGE_SIZE,
+    IMAGE_STD,
+    build_eval_transforms,
+    build_train_transforms,
+    create_resnet18,
+)
 
-device = torch.device("mps" if torch.mps.is_available() else "cpu")
-print("Using device:", device)
-
-IMAGE_SIZE = 224
-IMAGE_MEAN = [0.485, 0.456, 0.406]
-IMAGE_STD = [0.229, 0.224, 0.225]
-blocks_num_list = [2, 2, 2, 2]
-
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 FOOD_CLASSES = ["Fresh", "Bad"]
 CLASS_TO_IDX = {name: idx for idx, name in enumerate(FOOD_CLASSES)}
+DEFAULT_TRAIN_SPLIT = 0.6
+DEFAULT_VAL_SPLIT = 0.2
+DEFAULT_SEED = 42
 
-food_dir = Path(f"{path}/products_dataset")
+torch.manual_seed(DEFAULT_SEED)
+np.random.seed(DEFAULT_SEED)
 
-class LabeledDataset():
+
+def get_default_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+device = get_default_device()
+
+
+class LabeledDataset(Dataset):
     def __init__(
         self,
         food_dir: Path,
         food_classes: list[str],
-        transform=None) -> LabeledDataset:
-
-        self.food_dir = food_dir
-        self.food_classes = food_classes
+        transform=None,
+    ) -> None:
+        self.food_dir = Path(food_dir)
+        self.food_classes = list(food_classes)
         self.transform = transform
-        self.images_paths = []
-        self.labels = []
+        self.images_paths: list[Path] = []
+        self.labels: list[int] = []
         self.classes = list(food_classes)
         self.class_to_idx = {name: idx for idx, name in enumerate(food_classes)}
 
-        for cls_name in food_classes:
-            class_path = Path(food_dir)
-            class_path /= cls_name
+        for cls_name in self.food_classes:
+            class_path = self.food_dir / cls_name
+            if not class_path.exists():
+                raise FileNotFoundError(f"Class directory not found: {class_path}")
 
-            for image_name in class_path.iterdir():
-                image_path = class_path / image_name
-                self.images_paths.append(image_path)
-                self.labels.append(self.class_to_idx[cls_name])
+            for image_path in sorted(class_path.iterdir()):
+                if image_path.is_file():
+                    self.images_paths.append(image_path)
+                    self.labels.append(self.class_to_idx[cls_name])
 
     def __len__(self) -> int:
         return len(self.images_paths)
@@ -65,226 +78,166 @@ class LabeledDataset():
         image = Image.open(self.images_paths[index]).convert("RGB")
         label = self.labels[index]
 
-        if self.transform:
+        if self.transform is not None:
             image = self.transform(image)
 
         return image, label
+
+
+def resolve_food_dir(food_dir: Path | str | None = None) -> Path:
+    if food_dir is not None:
+        resolved = Path(food_dir).expanduser().resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(f"Dataset directory not found: {resolved}")
+        return resolved
+
+    download_root = Path(kagglehub.dataset_download("bloodlaac/products-dataset")).resolve()
+    candidates = [
+        download_root / "v3",
+        download_root / "products_dataset",
+        download_root,
+    ]
+
+    for candidate in candidates:
+        if all((candidate / cls_name).exists() for cls_name in FOOD_CLASSES):
+            return candidate
+
+    raise FileNotFoundError(
+        "Could not detect dataset root automatically. "
+        f"Checked: {', '.join(str(path) for path in candidates)}"
+    )
+
+
+def _split_indices(
+    dataset_len: int,
+    train_split: float,
+    val_split: float,
+    seed: int,
+) -> tuple[list[int], list[int], list[int]]:
+    if dataset_len <= 0:
+        raise ValueError("Dataset is empty.")
+    if not (0 < train_split < 1):
+        raise ValueError("train_split must be between 0 and 1.")
+    if not (0 < val_split < 1):
+        raise ValueError("val_split must be between 0 and 1.")
+    if train_split + val_split >= 1:
+        raise ValueError("train_split + val_split must be less than 1.")
+
+    test_split = 1.0 - train_split - val_split
+    train_size = int(train_split * dataset_len)
+    val_size = int(val_split * dataset_len)
+    test_size = dataset_len - train_size - val_size
+
+    if min(train_size, val_size, test_size) <= 0:
+        raise ValueError(
+            "Split configuration leaves an empty subset. "
+            f"train={train_size}, val={val_size}, test={test_size}"
+        )
+
+    generator = torch.Generator().manual_seed(seed)
+    indices = torch.randperm(dataset_len, generator=generator).tolist()
+
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size : train_size + val_size]
+    test_indices = indices[train_size + val_size :]
     
-train_transforms = T.Compose([
-    T.Resize(int(IMAGE_SIZE * 1.14)),
-    T.RandomHorizontalFlip(p=0.3),
-    T.RandomVerticalFlip(p=0.3),
-    T.RandomResizedCrop(IMAGE_SIZE, scale=(0.8, 1.0), ratio=(3/4, 4/3)),
-    T.ColorJitter(0.2, 0.2, 0.2, 0.1),
-    T.RandomAffine(degrees=0, translate=(0.3, 0.3)),
-    T.ToTensor(),
-    T.Normalize(IMAGE_MEAN, IMAGE_STD),
-])
+    return train_indices, val_indices, test_indices
 
-eval_transforms = T.Compose([
-    T.Resize(int(IMAGE_SIZE * 1.14)),
-    T.ToTensor(),
-    T.CenterCrop(IMAGE_SIZE),
-    T.Normalize(IMAGE_MEAN, IMAGE_STD),
-])
 
-food_dataset = LabeledDataset(food_dir, FOOD_CLASSES)
-DEFAULT_TEST_SPLIT = 0.2
+def build_dataloaders(
+    food_dir: Path | str | None = None,
+    batch_size: int = 16,
+    train_split: float = DEFAULT_TRAIN_SPLIT,
+    val_split: float = DEFAULT_VAL_SPLIT,
+    seed: int = DEFAULT_SEED,
+    num_workers: int = 0,
+    pin_memory: bool | None = None,
+):
+    resolved_food_dir = resolve_food_dir(food_dir)
 
-class Block(nn.Module):
-    """
-    Create basic unit of ResNet.
+    base_dataset = LabeledDataset(resolved_food_dir, FOOD_CLASSES, transform=None)
+    train_indices, val_indices, test_indices = _split_indices(
+        len(base_dataset),
+        train_split=train_split,
+        val_split=val_split,
+        seed=seed,
+    )
 
-    Consists of two convolutional layers.
+    train_dataset = Subset(
+        LabeledDataset(
+            resolved_food_dir,
+            FOOD_CLASSES,
+            transform=build_train_transforms(),
+        ),
+        train_indices,
+    )
+    val_dataset = Subset(
+        LabeledDataset(
+            resolved_food_dir,
+            FOOD_CLASSES,
+            transform=build_eval_transforms(),
+        ),
+        val_indices,
+    )
+    test_dataset = Subset(
+        LabeledDataset(
+            resolved_food_dir,
+            FOOD_CLASSES,
+            transform=build_eval_transforms(),
+        ),
+        test_indices,
+    )
 
-    """
+    if pin_memory is None:
+        pin_memory = device.type == "cuda"
 
-    def __init__(
-            self,
-            in_channels: int,
-            out_channels: int,
-            stride: int = 1,
-            downsampling=None
-        ) -> Block:
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=max(batch_size, 64),
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=max(batch_size, 64),
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
-        super().__init__()
+    return train_loader, val_loader, test_loader
 
-        self.conv1 = nn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1
-        )
-        self.bn1 = nn.BatchNorm2d(num_features=out_channels)
-        self.bn2 = nn.BatchNorm2d(num_features=out_channels)
-        self.relu = nn.ReLU()
-        self.conv2 = nn.Conv2d(
-            in_channels=out_channels,
-            out_channels=out_channels,
-            kernel_size=3,
-            stride=1,  # TODO: Replace with padding="same"
-            padding=1
-        )
-        self.downsampling = downsampling
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        input = x
-
-        pred = self.bn1(self.conv1(x))
-        pred = self.relu(pred)
-        pred = self.bn2(self.conv2(pred))
-
-        if self.downsampling is not None:
-            input = self.downsampling(x)
-
-        pred += input
-        pred = self.relu(pred)
-
-        return pred
-    
-class ResNet(nn.Module):
-    """
-    Build model ResNet and return prediction
-
-    """
-
-    def __init__(self, blocks_num_list: list[int]) -> ResNet:
-        """
-        ResNet init.
-
-        Parameters
-        ----------
-        blocks_num_list : list[int]
-                          Number of basic blocks for each layer.
-
-        """
-        super().__init__()
-
-        self.in_channels = 64  # Default number of channels for first layer. Mutable!
-
-        # Reduce resolution of picture by 2
-        # 224 -> 112
-        self.conv1 = nn.Conv2d(
-            in_channels=3,
-            out_channels=64,
-            kernel_size=7,
-            stride=2,
-            padding=3
-        )
-        self.batch_norm = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU()
-        self.pooling = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)  # 112 -> 56
-
-        self.layer1 = self.create_layer(  # Default stride. No resolution reduction.
-            out_channels=64,
-            num_blocks=blocks_num_list[0]
-        )
-        self.layer2 = self.create_layer(  # Resolution reduction. 56 -> 28
-            out_channels=128,
-            num_blocks=blocks_num_list[1],
-            stride=2
-        )
-        self.layer3 = self.create_layer(  # Resolution reduction. 28 -> 14
-            out_channels=256,
-            num_blocks=blocks_num_list[2],
-            stride=2
-        )
-        self.layer4 = self.create_layer(  # Resolution reduction. 14 -> 7
-            out_channels=512,
-            num_blocks=blocks_num_list[3],
-            stride=2
-        )
-
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512, 2)
-
-    def create_layer(
-            self,
-            out_channels: int,
-            num_blocks: int,
-            stride: int = 1
-        ) -> nn.Sequential:
-        """
-        Create ResNet layer.
-
-        Parameters
-        ----------
-        out_channels : int
-            Number of output channels per block
-        num_blocks : int
-            Number of blocks per layer
-        stride : int, default=1
-            Step of filter in conv layer
-
-        """
-        downsampling = None
-
-        if stride != 1:
-            downsampling = nn.Sequential(
-                nn.Conv2d(
-                    in_channels=self.in_channels,
-                    out_channels=out_channels,
-                    kernel_size=1,
-                    stride=stride
-                ),
-                nn.BatchNorm2d(out_channels)
-            )
-
-        blocks: list[Block] = []
-
-        blocks.append(Block(
-            in_channels=self.in_channels,
-            out_channels=out_channels,
-            stride=stride,
-            downsampling=downsampling
-        ))
-
-        self.in_channels = out_channels
-
-        for _ in range(num_blocks - 1):
-            blocks.append(Block(out_channels, out_channels))
-
-        return nn.Sequential(*blocks)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pred = self.batch_norm(self.conv1(x))
-        pred = self.relu(pred)
-        pred = self.pooling(pred)
-
-        pred = self.layer1(pred)
-        pred = self.layer2(pred)
-        pred = self.layer3(pred)
-        pred = self.layer4(pred)
-
-        pred = self.avgpool(pred)
-        pred = torch.flatten(pred, 1)
-        pred = self.fc(pred)
-
-        return pred
-    
 def plot_history(
-        epochs: int,
-        train_history: list,
-        val_history: list,
-        optimizer_name: str,
-        label: str
-    ):
+    epochs: int,
+    train_history: list[float],
+    val_history: list[float],
+    optimizer_name: str,
+    label: str,
+) -> None:
     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 10))
     ax1.plot(np.arange(1, epochs + 1), train_history, label=label)
     ax2.plot(np.arange(1, epochs + 1), val_history, label=label)
 
-    for ax in (ax1, ax2):
-        ax.set_xlabel('Epochs')
-        ax.set_ylabel('Accuracy')
-        ax.legend(loc='lower right')
-        ax.grid(True)
+    for axis in (ax1, ax2):
+        axis.set_xlabel("Epochs")
+        axis.set_ylabel("Accuracy")
+        axis.legend(loc="lower right")
+        axis.grid(True)
 
-    ax1.set_title(f'{optimizer_name} Training accuracy')
-    ax2.set_title(f'{optimizer_name} Validation accuracy')
-
+    ax1.set_title(f"{optimizer_name} Training accuracy")
+    ax2.set_title(f"{optimizer_name} Validation accuracy")
     plt.tight_layout()
     plt.show()
+
 
 def validate(model, loader, criterion):
     correct, total = 0, 0
@@ -292,101 +245,137 @@ def validate(model, loader, criterion):
 
     model.eval()
 
-    for batch in loader:
-        images, labels = batch
+    for images, labels in loader:
         images = images.to(device)
         labels = labels.to(device)
 
         with torch.no_grad():
-            pred = model(images)
+            logits = model(images)
 
-        loss = criterion(pred, labels)
+        loss = criterion(logits, labels)
         val_loss += loss.item() * len(labels)
         total += len(labels)
 
-        pred = torch.argmax(pred, dim=1)
-
-        correct += (pred == labels).sum().item()
+        predictions = torch.argmax(logits, dim=1)
+        correct += (predictions == labels).sum().item()
 
     accuracy = correct / total
     loss = val_loss / total
-
     return accuracy, loss
 
-def train(model, criterion, train_loader, val_loader, optimizer, epochs=10):
+
+def train(
+    model,
+    criterion,
+    train_loader,
+    val_loader,
+    optimizer,
+    epochs: int = 10,
+    patience: int = 5,
+    min_delta: float = 0.0,
+):
     train_acc, train_loss = [], []
     validation_acc, validation_loss = [], []
 
-    model.train()
+    best_val_loss = float("inf")
+    best_model_state = copy.deepcopy(model.state_dict())
+    epochs_without_improvement = 0
 
     for epoch in tqdm(range(epochs), leave=False):
+        model.train()
+
         correct, total = 0, 0
         epoch_loss = 0.0
 
-        for i, batch in enumerate(train_loader, start=1):
-            images, labels = batch
-
+        for step, (images, labels) in enumerate(train_loader, start=1):
             images = images.to(device)
             labels = labels.to(device)
 
             optimizer.zero_grad()
-            pred = model(images)
-            loss = criterion(pred, labels)
+            logits = model(images)
+            loss = criterion(logits, labels)
 
             loss.backward()
             optimizer.step()
 
-            pred = torch.argmax(pred, dim=1)
+            predictions = torch.argmax(logits, dim=1)
 
             total += len(labels)
-            epoch_loss += loss.item() * pred.shape[0]
-            correct += (pred == labels).sum().item()
+            epoch_loss += loss.item() * len(labels)
+            correct += (predictions == labels).sum().item()
             accuracy = correct / total
 
-            if i % 100 == 0:
-              temp_loss = epoch_loss / total
-
-              print(f"Epoch: [{epoch + 1}/{epochs}], Step: [{i}/{len(train_loader)}]\n"
-                    f"Train loss: {temp_loss:.4f}, Train Accuracy: {accuracy:.4f}\n")
+            if step % 100 == 0:
+                temp_loss = epoch_loss / total
+                print(
+                    f"Epoch: [{epoch + 1}/{epochs}], "
+                    f"Step: [{step}/{len(train_loader)}]\n"
+                    f"Train loss: {temp_loss:.4f}, "
+                    f"Train Accuracy: {accuracy:.4f}\n"
+                )
 
         train_acc.append(accuracy)
         train_loss.append(epoch_loss / total)
+
         val_acc, val_loss = validate(model, val_loader, criterion)
         validation_acc.append(val_acc)
         validation_loss.append(val_loss)
 
-        print(f"Epoch: [{epoch + 1}/{epochs}] has passed\n"
-              f"Train loss: {train_loss[-1]:.4f}, Train accuracy: {train_acc[-1]:.4f}\n"
-              f"Validation loss: {val_loss:.4f}, Validation accuracy: {val_acc:.4f}\n")
+        print(
+            f"Epoch: [{epoch + 1}/{epochs}] has passed\n"
+            f"Train loss: {train_loss[-1]:.4f}, "
+            f"Train accuracy: {train_acc[-1]:.4f}\n"
+            f"Validation loss: {val_loss:.4f}, "
+            f"Validation accuracy: {val_acc:.4f}\n"
+        )
 
+        if val_loss < best_val_loss - min_delta:
+            best_val_loss = val_loss
+            best_model_state = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+            print(
+                f"Validation loss improved to {best_val_loss:.4f}. "
+                "Best model updated.\n"
+            )
+        else:
+            epochs_without_improvement += 1
+            print(
+                f"No improvement for {epochs_without_improvement} epoch(s). "
+                f"Patience: {patience}\n"
+            )
+
+            if epochs_without_improvement >= patience:
+                print(f"Early stopping triggered at epoch {epoch + 1}\n")
+                break
+
+    model.load_state_dict(best_model_state)
     return train_acc, train_loss, validation_acc, validation_loss
+
 
 def test(model, loader, criterion):
     correct, total = 0, 0
     test_loss = 0.0
-
     y_true, y_pred = [], []
 
     model.eval()
 
-    for batch in loader:
-        images, labels = batch
+    for images, labels in loader:
         images = images.to(device)
         labels = labels.to(device)
 
         with torch.no_grad():
-            pred = model(images)
+            logits = model(images)
 
-        loss = criterion(pred, labels)
+        loss = criterion(logits, labels)
         test_loss += loss.item() * len(labels)
 
-        pred = torch.argmax(pred, dim=1)
+        predictions = torch.argmax(logits, dim=1)
 
         y_true.append(labels.cpu().numpy())
-        y_pred.append(pred.cpu().numpy())
+        y_pred.append(predictions.cpu().numpy())
 
         total += len(labels)
-        correct += (pred == labels).sum().item()
+        correct += (predictions == labels).sum().item()
 
     test_accuracy = correct / total
     test_loss = test_loss / total
@@ -398,57 +387,6 @@ def test(model, loader, criterion):
     report = classification_report(y_true, y_pred, digits=4)
 
     return test_accuracy, test_loss, cm, report
-
-
-def save_checkpoint(
-    model: nn.Module,
-    path: Path,
-    classes: list[str] | None = None,
-    class_to_idx: dict | None = None,
-) -> dict:
-    """Save checkpoint and verify roundtrip loading with strict=True."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    classes = classes or FOOD_CLASSES
-    class_to_idx = class_to_idx or CLASS_TO_IDX
-
-    torch.save(model.state_dict(), path)
-
-    result: dict[str, object] = {
-        "path": str(path.resolve()),
-        "format": None,
-    }
-
-    return result
-
-
-def build_dataloaders(batch_size: int, val_split: float):
-    dataset_len = len(food_dataset)
-    val_size = int(dataset_len * val_split)
-    test_size = int(dataset_len * DEFAULT_TEST_SPLIT)
-    train_size = dataset_len - val_size - test_size
-    if train_size <= 0:
-        raise ValueError("val_split слишком большой для текущего датасета")
-
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
-        food_dataset, [train_size, val_size, test_size]
-    )
-
-    train_dataset.dataset.transform = train_transforms
-    val_dataset.dataset.transform = eval_transforms
-    test_dataset.dataset.transform = eval_transforms
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
-    )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    return train_loader, val_loader, test_loader
 
 
 def build_optimizer(name: str, params, learning_rate: float):
@@ -467,6 +405,35 @@ def build_criterion(name: str):
     raise ValueError(f"Unsupported loss function: {name}")
 
 
+def save_checkpoint(
+    model: nn.Module,
+    path: Path | str,
+    classes: list[str] | None = None,
+    class_to_idx: dict[str, int] | None = None,
+) -> dict:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    classes = classes or FOOD_CLASSES
+    class_to_idx = class_to_idx or CLASS_TO_IDX
+
+    checkpoint = {
+        "model_state": model.state_dict(),
+        "classes": classes,
+        "class_to_idx": class_to_idx,
+        "num_classes": len(classes),
+        "image_size": IMAGE_SIZE,
+        "image_mean": list(IMAGE_MEAN),
+        "image_std": list(IMAGE_STD),
+    }
+    torch.save(checkpoint, path)
+
+    return {
+        "path": str(path.resolve()),
+        "format": "checkpoint_dict",
+    }
+
+
 def train_with_config(
     epochs_num: int,
     batch_size: int,
@@ -475,12 +442,24 @@ def train_with_config(
     loss_function: str,
     val_split: float,
     checkpoint_path: Path | None = None,
+    food_dir: Path | str | None = None,
+    patience: int = 5,
+    min_delta: float = 0.001,
 ):
+    train_split = 1.0 - val_split - 0.2
+    if train_split <= 0:
+        raise ValueError("val_split is too large for the fixed 20% test split.")
+
     model = create_resnet18(num_classes=len(FOOD_CLASSES)).to(device)
     criterion = build_criterion(loss_function)
     optimizer = build_optimizer(optimizer_name, model.parameters(), learning_rate)
 
-    train_loader, val_loader, test_loader = build_dataloaders(batch_size, val_split)
+    train_loader, val_loader, test_loader = build_dataloaders(
+        food_dir=food_dir,
+        batch_size=batch_size,
+        train_split=train_split,
+        val_split=val_split,
+    )
 
     train_acc, train_loss, val_acc, val_loss = train(
         model,
@@ -489,6 +468,8 @@ def train_with_config(
         val_loader,
         optimizer=optimizer,
         epochs=epochs_num,
+        patience=patience,
+        min_delta=min_delta,
     )
 
     test_acc, test_loss, _, _ = test(model, test_loader, criterion)
@@ -517,34 +498,70 @@ def train_with_config(
     }
 
 
+def predict_image(model, image_path: str | Path):
+    image = Image.open(image_path).convert("RGB")
+    x = build_eval_transforms()(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logits = model(x)
+        probs = F.softmax(logits, dim=1)
+
+    pred_idx = torch.argmax(probs, dim=1).item()
+    pred_class = FOOD_CLASSES[pred_idx]
+    pred_conf = probs[0, pred_idx].item()
+
+    all_probs = {
+        FOOD_CLASSES[i]: float(probs[0, i].item())
+        for i in range(len(FOOD_CLASSES))
+    }
+
+    return {
+        "predicted_class": pred_class,
+        "confidence": pred_conf,
+        "probabilities": all_probs,
+    }
+
+
 if __name__ == "__main__":
-    model = ResNet(blocks_num_list).to(device)
+    logging.basicConfig(level=logging.INFO)
+    print("Using device:", device)
+
+    model = create_resnet18(num_classes=len(FOOD_CLASSES)).to(device)
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    criterion = nn.CrossEntropyLoss()
 
-    print("Training ResNet18 with SGD\n")
+    train_loader, val_loader, test_loader = build_dataloaders(batch_size=16)
 
-    train_loader, val_loader, test_loader = build_dataloaders(batch_size=16, val_split=0.2)
+    print("Training ResNet18 v3 with SGD\n")
     train_acc, train_loss, val_acc, val_loss = train(
         model,
-        nn.CrossEntropyLoss(),
+        criterion,
         train_loader,
         val_loader,
         optimizer=optimizer,
         epochs=20,
+        patience=5,
+        min_delta=0.001,
     )
 
-    test_acc, test_loss, cm, report = test(model, test_loader, nn.CrossEntropyLoss())
+    test_acc, test_loss, cm, report = test(model, test_loader, criterion)
 
     print(f"\nTest accuracy: {test_acc:.4f}")
     print(f"\nTest loss: {test_loss:.4f}")
     print(f"\nReport:\n{report}")
 
-    out = Path("../../../artifacts/models").resolve()
-    checkpoint_path = out / "model.pth"
-    save_checkpoint(
+    fig, ax = plt.subplots(figsize=(12, 12))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=FOOD_CLASSES)
+    disp.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+    ax.set_title("Confusion Matrix")
+    plt.tight_layout()
+    plt.show()
+
+    checkpoint_path = Path("model_v3.pth")
+    save_info = save_checkpoint(
         model,
         checkpoint_path,
         classes=FOOD_CLASSES,
         class_to_idx=CLASS_TO_IDX,
     )
-    print(f"Saved: {checkpoint_path}")
+    print(f"Saved: {save_info['path']}")
