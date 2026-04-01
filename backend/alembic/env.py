@@ -38,10 +38,10 @@ def get_url() -> str:
         return env_url
 
     db_user = os.getenv("DB_USER", "bloodlaac")
-    db_password = os.getenv("DB_PASSWORD", "pass")
+    db_password = os.getenv("DB_PASSWORD", "1")
     db_host = os.getenv("DB_HOST", "localhost")
     db_port = os.getenv("DB_PORT", "5432")
-    db_name = os.getenv("DB_NAME", "food_quality_db")
+    db_name = os.getenv("DB_NAME", "sniff_cw_db")
     return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
 

@@ -10,30 +10,16 @@ class ExperimentBase(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class CreateExperimentRequest(BaseModel):
-    user_id: int
-    dataset_id: int
-    config: TrainingConfigCreate
-
 
 class StartExperimentRequest(BaseModel):
+    experiment_id: Optional[int] = None
     user_id: Optional[int] = None
     dataset_id: int
+    config_id: Optional[int] = None
     config: TrainingConfigCreate
 
 
 class StartExperimentResponse(BaseModel):
-    experiment_id: int
-    status: str
-
-
-class TrainExperimentRequest(BaseModel):
-    dataset_id: int
-    training_config_id: int
-    user_id: Optional[int] = None
-
-
-class TrainExperimentResponse(BaseModel):
     experiment_id: int
     status: str
 
@@ -57,5 +43,8 @@ class ExperimentJoined(BaseModel):
 
     train_accuracy: Optional[float] = None
     train_loss: Optional[float] = None
+    validation_accuracy: Optional[float] = None
+    validation_loss: Optional[float] = None
+    params_num: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)

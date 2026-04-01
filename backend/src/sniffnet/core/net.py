@@ -451,6 +451,7 @@ def train_with_config(
         raise ValueError("val_split is too large for the fixed 20% test split.")
 
     model = create_resnet18(num_classes=len(FOOD_CLASSES)).to(device)
+    params_num = sum(param.numel() for param in model.parameters())
     criterion = build_criterion(loss_function)
     optimizer = build_optimizer(optimizer_name, model.parameters(), learning_rate)
 
@@ -488,6 +489,7 @@ def train_with_config(
         "train_loss": train_loss[-1] if train_loss else None,
         "val_accuracy": val_acc[-1] if val_acc else None,
         "val_loss": val_loss[-1] if val_loss else None,
+        "params_num": params_num,
         "test_accuracy": test_acc,
         "test_loss": test_loss,
         "train_accuracy_history": train_acc,

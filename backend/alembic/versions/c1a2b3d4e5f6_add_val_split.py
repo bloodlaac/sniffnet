@@ -17,10 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("training_config") as batch_op:
+    with op.batch_alter_table("training_configs") as batch_op:
         batch_op.add_column(sa.Column("val_split", sa.Float(), nullable=True, server_default="0.2"))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("training_config") as batch_op:
+    with op.batch_alter_table("training_configs") as batch_op:
         batch_op.drop_column("val_split")

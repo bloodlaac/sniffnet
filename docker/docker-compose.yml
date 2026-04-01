@@ -1,12 +1,12 @@
 services:
   postgres:
-    image: postgres:15
-    container_name: food_quality_db_container
+    image: postgres:16
+    container_name: sniffnet_shared_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: bloodlaac
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: food_quality_db
+      POSTGRES_PASSWORD: 1
+      POSTGRES_DB: sniff_cw_db
     ports:
       - "5432:5432"
     volumes:

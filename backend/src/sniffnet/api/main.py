@@ -3,17 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from alembic import command
 from alembic.config import Config
 from pathlib import Path
+from datetime import datetime, timezone
+from sqlalchemy import inspect
 from sniffnet.api.routes import (
-    datasets,
     experiments,
-    metrics,
-    models,
-    training_configs,
-    users,
-    auth,
     predict,
-    model_load,
 )
+from sniffnet.database.db import SessionLocal, engine
+from sniffnet.database.db_models import Experiment
 
 import uvicorn
 
@@ -35,15 +32,8 @@ app.add_middleware(
 )
 
 api_prefix = "/api"
-app.include_router(datasets.router, prefix=api_prefix)
 app.include_router(experiments.router, prefix=api_prefix)
-app.include_router(metrics.router, prefix=api_prefix)
-app.include_router(models.router, prefix=api_prefix)
-app.include_router(training_configs.router, prefix=api_prefix)
-app.include_router(users.router, prefix=api_prefix)
-app.include_router(auth.router, prefix=api_prefix)
 app.include_router(predict.router, prefix=api_prefix)
-app.include_router(model_load.router, prefix=api_prefix)
 
 @app.get("/")
 def get_main_page():
@@ -53,11 +43,47 @@ def get_main_page():
 def run_migrations() -> None:
     project_root = Path(__file__).resolve().parents[3]
     alembic_cfg = Config(str(project_root / "alembic.ini"))
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    shared_schema_tables = {
+        "roles",
+        "users",
+        "datasets",
+        "training_configs",
+        "experiments",
+        "models",
+        "metrics",
+    }
+
+    if "alembic_version" not in existing_tables and shared_schema_tables.issubset(existing_tables):
+        command.stamp(alembic_cfg, "head")
+        return
+
     command.upgrade(alembic_cfg, "head")
+
+
+def reconcile_interrupted_experiments() -> None:
+    db = SessionLocal()
+    try:
+        interrupted = (
+            db.query(Experiment)
+            .filter(Experiment.status == "RUNNING")
+            .all()
+        )
+        for experiment in interrupted:
+            experiment.status = "FAILED"
+            experiment.error_message = "Python service restarted while training was in progress"
+            experiment.end_time = datetime.now(timezone.utc).replace(tzinfo=None)
+            experiment.external_experiment_id = experiment.experiment_id
+        if interrupted:
+            db.commit()
+    finally:
+        db.close()
 
 
 def main() -> None:
     run_migrations()
+    reconcile_interrupted_experiments()
     uvicorn.run(app, host="localhost", port=8000)
 
 if __name__ == "__main__":

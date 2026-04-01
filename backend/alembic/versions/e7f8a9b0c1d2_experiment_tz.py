@@ -17,12 +17,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("experiment") as batch_op:
+    with op.batch_alter_table("experiments") as batch_op:
         batch_op.alter_column("start_time", type_=sa.DateTime(timezone=True))
         batch_op.alter_column("end_time", type_=sa.DateTime(timezone=True))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("experiment") as batch_op:
+    with op.batch_alter_table("experiments") as batch_op:
         batch_op.alter_column("start_time", type_=sa.DateTime(timezone=False))
         batch_op.alter_column("end_time", type_=sa.DateTime(timezone=False))
