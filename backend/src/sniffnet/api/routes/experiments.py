@@ -298,6 +298,38 @@ def get_experiment(
     return to_experiment_response(experiment, experiment.model, metric)
 
 
+@router.get("/{id}/state")
+def get_experiment_state(
+    id: int,
+    db: Session = Depends(get_database),
+) -> dict:
+    experiment = get_experiment_with_relations(db, id)
+    metric = get_metric(db, experiment.dataset_id, experiment.config_id)
+    model = experiment.model
+    return {
+        "experiment_id": experiment.id,
+        "dataset_id": experiment.dataset_id,
+        "config_id": experiment.config_id,
+        "user_id": experiment.user_id,
+        "model_id": model.id if model else None,
+        "start_time": experiment.start_time,
+        "end_time": experiment.end_time,
+        "status": experiment.status,
+        "error_message": experiment.error_message,
+        "batch_size": experiment.config.batch_size,
+        "epochs_num": experiment.config.epochs_num,
+        "loss_function": experiment.config.loss_function,
+        "learning_rate": float(experiment.config.learning_rate),
+        "optimizer": experiment.config.optimizer,
+        "val_split": float(experiment.config.validation_split),
+        "train_accuracy": metric.train_accuracy if metric else None,
+        "train_loss": metric.train_loss if metric else None,
+        "validation_accuracy": metric.validation_accuracy if metric else None,
+        "validation_loss": metric.validation_loss if metric else None,
+        "params_num": model.params_num if model else None,
+    }
+
+
 @router.get("/{id}/report")
 def get_experiment_report(
     id: int,
@@ -427,6 +459,22 @@ def start_experiment_legacy(
     user = db.scalar(select(User).options(joinedload(User.role)).where(User.id == user_id))
     if user is None:
         raise NotFoundException("User not found")
+
+    if request.experiment_id is not None:
+        experiment = db.get(Experiment, request.experiment_id)
+        if experiment is None:
+            raise NotFoundException("Experiment not found")
+        if experiment.user_id != user.id:
+            raise BadRequestException("Experiment belongs to another user")
+
+        experiment.status = "RUNNING"
+        experiment.error_message = None
+        experiment.external_experiment_id = experiment.id
+        db.commit()
+
+        thread = threading.Thread(target=_run_training_job, args=(experiment.id,), daemon=True)
+        thread.start()
+        return LegacyStartExperimentResponse(experiment_id=experiment.id, status=experiment.status)
 
     config_payload = None
     if request.config:

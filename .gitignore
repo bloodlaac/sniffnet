@@ -63,7 +63,8 @@ next-env.d.ts
 **node_modules
 
 # models
-**/model*.[json|pth]
+**/model*.json
+**.pth
 
 # images
 **/images

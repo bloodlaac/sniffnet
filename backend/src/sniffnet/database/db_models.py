@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from sniffnet.database.db import Base
@@ -30,7 +30,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     role: Mapped[Role] = relationship(back_populates="users")
     experiments: Mapped[list["Experiment"]] = relationship(back_populates="user")
@@ -43,7 +43,7 @@ class Dataset(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
-    classes_num: Mapped[int] = mapped_column("classesNum", Integer, nullable=False)
+    classes_num: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(255), nullable=False)
 
     experiments: Mapped[list["Experiment"]] = relationship(back_populates="dataset")
@@ -55,14 +55,14 @@ class TrainingConfig(Base):
     __tablename__ = "training_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    epochs_num: Mapped[int] = mapped_column("epochsNum", Integer, nullable=False)
-    batch_size: Mapped[int] = mapped_column("batchSize", Integer, nullable=False)
-    learning_rate: Mapped[float] = mapped_column("learningRate", Numeric(10, 6), nullable=False)
+    epochs_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    learning_rate: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False)
     optimizer: Mapped[str] = mapped_column(String(100), nullable=False)
-    loss_function: Mapped[str] = mapped_column("lossFunction", String(100), nullable=False)
-    validation_split: Mapped[float] = mapped_column("validationSplit", Numeric(4, 2), nullable=False)
-    layers_num: Mapped[int | None] = mapped_column("layersNum", Integer)
-    neurons_num: Mapped[int | None] = mapped_column("neuronsNum", Integer)
+    loss_function: Mapped[str] = mapped_column(String(100), nullable=False)
+    validation_split: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False)
+    layers_num: Mapped[int | None] = mapped_column(Integer)
+    neurons_num: Mapped[int | None] = mapped_column(Integer)
 
     experiments: Mapped[list["Experiment"]] = relationship(back_populates="config")
     models: Mapped[list["Model"]] = relationship(back_populates="config")
@@ -77,11 +77,11 @@ class Experiment(Base):
     config_id: Mapped[int] = mapped_column(ForeignKey("training_configs.id"), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="CREATED")
-    start_time: Mapped[datetime] = mapped_column("startTime", DateTime(timezone=True), default=utcnow, nullable=False)
-    end_time: Mapped[datetime | None] = mapped_column("endTime", DateTime(timezone=True))
-    report_path: Mapped[str | None] = mapped_column("reportPath", String(255))
-    error_message: Mapped[str | None] = mapped_column("errorMessage", String(255))
-    external_experiment_id: Mapped[int | None] = mapped_column("externalExperimentId", Integer, unique=True)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    report_path: Mapped[str | None] = mapped_column(String(255))
+    error_message: Mapped[str | None] = mapped_column(String(255))
+    external_experiment_id: Mapped[int | None] = mapped_column(Integer, unique=True)
 
     dataset: Mapped[Dataset] = relationship(back_populates="experiments")
     config: Mapped[TrainingConfig] = relationship(back_populates="experiments")
@@ -97,17 +97,16 @@ class Model(Base):
     dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id"), nullable=False)
     config_id: Mapped[int] = mapped_column(ForeignKey("training_configs.id"), nullable=False)
     experiment_id: Mapped[int] = mapped_column(ForeignKey("experiments.id"), nullable=False, unique=True)
-    params_num: Mapped[int | None] = mapped_column("paramsNum", Integer)
-    training_time_seconds: Mapped[int] = mapped_column("trainingTimeSeconds", Integer, nullable=False, default=0)
+    params_num: Mapped[int | None] = mapped_column(Integer)
+    training_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available_for_inference: Mapped[bool] = mapped_column(
-        "availableForInference",
         Boolean,
         nullable=False,
         default=False,
     )
-    weights_path: Mapped[str | None] = mapped_column("weightsPath", String(255))
-    external_model_id: Mapped[int | None] = mapped_column("externalModelId", Integer, unique=True)
-    created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), default=utcnow, nullable=False)
+    weights_path: Mapped[str | None] = mapped_column(String(255))
+    external_model_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     dataset: Mapped[Dataset] = relationship(back_populates="models")
     config: Mapped[TrainingConfig] = relationship(back_populates="models")
@@ -121,11 +120,11 @@ class Metric(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id"), nullable=False)
     config_id: Mapped[int] = mapped_column(ForeignKey("training_configs.id"), nullable=False)
-    train_accuracy: Mapped[float] = mapped_column("trainAccuracy", Float, nullable=False)
-    train_loss: Mapped[float] = mapped_column("trainLoss", Float, nullable=False)
-    validation_accuracy: Mapped[float | None] = mapped_column("validationAccuracy", Float)
-    validation_loss: Mapped[float | None] = mapped_column("validationLoss", Float)
-    details_json: Mapped[str | None] = mapped_column("detailsJson", Text)
+    train_accuracy: Mapped[float] = mapped_column(Float, nullable=False)
+    train_loss: Mapped[float] = mapped_column(Float, nullable=False)
+    validation_accuracy: Mapped[float | None] = mapped_column(Float)
+    validation_loss: Mapped[float | None] = mapped_column(Float)
+    details_json: Mapped[str | None] = mapped_column(String(10000))
 
     dataset: Mapped[Dataset] = relationship(back_populates="metrics")
     config: Mapped[TrainingConfig] = relationship(back_populates="metrics")
@@ -136,12 +135,12 @@ class UploadedImage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    original_filename: Mapped[str] = mapped_column("originalFilename", String(255), nullable=False)
-    stored_filename: Mapped[str] = mapped_column("storedFilename", String(255), unique=True, nullable=False)
-    content_type: Mapped[str] = mapped_column("contentType", String(100), nullable=False)
-    size_bytes: Mapped[int] = mapped_column("sizeBytes", Integer, nullable=False)
-    storage_path: Mapped[str] = mapped_column("storagePath", String(500), nullable=False)
-    uploaded_at: Mapped[datetime] = mapped_column("uploadedAt", DateTime(timezone=True), default=utcnow, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="uploaded_images")
     classifications: Mapped[list["ClassificationRequest"]] = relationship(back_populates="image")
@@ -155,11 +154,11 @@ class ClassificationRequest(Base):
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id"), nullable=False)
     image_id: Mapped[int] = mapped_column(ForeignKey("uploaded_images.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="CREATED")
-    created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), default=utcnow, nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column("completedAt", DateTime(timezone=True))
-    predicted_class: Mapped[str | None] = mapped_column("predictedClass", String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    predicted_class: Mapped[str | None] = mapped_column(String(100))
     confidence: Mapped[float | None] = mapped_column(Float)
-    probabilities_json: Mapped[str | None] = mapped_column("probabilitiesJson", Text)
+    probabilities_json: Mapped[str | None] = mapped_column(String(10000))
 
     user: Mapped[User] = relationship(back_populates="classifications")
     model: Mapped[Model] = relationship(back_populates="classifications")

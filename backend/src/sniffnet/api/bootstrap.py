@@ -28,13 +28,13 @@ def ensure_timezone_columns() -> None:
         return
 
     timestamp_columns = [
-        ("users", "createdAt"),
-        ("experiments", "startTime"),
-        ("experiments", "endTime"),
-        ("models", "createdAt"),
-        ("uploaded_images", "uploadedAt"),
-        ("classification_requests", "createdAt"),
-        ("classification_requests", "completedAt"),
+        ("users", "created_at"),
+        ("experiments", "start_time"),
+        ("experiments", "end_time"),
+        ("models", "created_at"),
+        ("uploaded_images", "uploaded_at"),
+        ("classification_requests", "created_at"),
+        ("classification_requests", "completed_at"),
     ]
 
     with engine.begin() as connection:
