@@ -1,0 +1,8 @@
+{
+  "architecture": "resnet18",
+  "augmentation": "none",
+  "image_size": 256,
+  "epochs": 20,
+  "learning_rate": 0.0001,
+  "batch_size": 32
+}

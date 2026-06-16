@@ -7,7 +7,7 @@ import torchvision.transforms as T
 from torch import nn
 from torchvision.transforms import InterpolationMode
 
-IMAGE_SIZE = 224
+IMAGE_SIZE = 256
 IMAGE_MEAN = [0.485, 0.456, 0.406]
 IMAGE_STD = [0.229, 0.224, 0.225]
 DEFAULT_BLOCKS_NUM = (2, 2, 2, 2)
@@ -18,6 +18,23 @@ def build_fill_value(image_mean: Sequence[float] = IMAGE_MEAN) -> tuple[int, int
 
 
 def build_train_transforms(
+    image_size: int = IMAGE_SIZE,
+    image_mean: Sequence[float] = IMAGE_MEAN,
+    image_std: Sequence[float] = IMAGE_STD,
+) -> T.Compose:
+    return T.Compose(
+        [
+            T.Resize(
+                (image_size, image_size),
+                interpolation=InterpolationMode.BILINEAR,
+            ),
+            T.ToTensor(),
+            T.Normalize(image_mean, image_std),
+        ]
+    )
+
+
+def build_augmented_train_transforms(
     image_size: int = IMAGE_SIZE,
     image_mean: Sequence[float] = IMAGE_MEAN,
     image_std: Sequence[float] = IMAGE_STD,
@@ -252,6 +269,7 @@ __all__ = [
     "DEFAULT_BLOCKS_NUM",
     "build_fill_value",
     "build_train_transforms",
+    "build_augmented_train_transforms",
     "build_eval_transforms",
     "Block",
     "ResNet",
